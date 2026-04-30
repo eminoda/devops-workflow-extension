@@ -11,17 +11,22 @@
       <Card v-for="j in jobs" :key="j.id">
         <CardContent class="flex items-center justify-between gap-3 py-4">
           <div class="min-w-0">
-            <div class="truncate text-sm font-medium">{{ j.name || '新 Job' }}</div>
+            <button
+              type="button"
+              class="block w-full truncate text-left text-sm font-medium hover:underline"
+              title="打开 Jenkins Job"
+              @click="openJenkins(j)"
+            >
+              {{ j.name || '新 Job' }}
+            </button>
             <div class="truncate font-mono text-xs text-muted-foreground">Job：{{ j.jobPath }}</div>
           </div>
           <div class="flex shrink-0 flex-wrap items-center gap-2">
-            <Button type="button" size="sm" :disabled="running" @click="run(j)">
+            <Button type="button" size="icon" :disabled="running" title="运行" @click="run(j)">
               <Play class="h-4 w-4" />
-              运行
             </Button>
-            <Button type="button" size="sm" variant="outline" @click="openJenkins(j)">Jenkins</Button>
-            <Button v-if="j.verifyUrl" type="button" size="sm" variant="outline" @click="openUrl(j.verifyUrl!)">
-              业务站
+            <Button v-if="j.verifyUrl" type="button" size="icon" variant="outline" title="业务站" @click="openUrl(j.verifyUrl!)">
+              <ExternalLink class="h-4 w-4" />
             </Button>
           </div>
         </CardContent>
@@ -73,7 +78,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Play } from 'lucide-vue-next'
+import { ExternalLink, Play } from 'lucide-vue-next'
 import NoJobsCard from '@/components/NoJobsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'

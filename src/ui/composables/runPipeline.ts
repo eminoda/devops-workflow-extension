@@ -62,9 +62,10 @@ export async function runJobAndMaybeChain(
   const wh = webhookForJob(settings)
   if (wh) {
     try {
+      const jobType = chainDepth > 0 ? '关联任务' : '主任务'
       await sendWecomMarkdown(
         wh,
-        `**Jenkins 开始构建**\n> 任务: ${job.name}\n> 链深: ${chainDepth}\n> 参数: \`${JSON.stringify(params)}\``,
+        `**Jenkins 开始构建**\n> 任务: ${job.name}\n> 类型: ${jobType}\n> 参数: \`${JSON.stringify(params)}\``,
       )
     } catch (e) {
       log?.(`企微(开始) 通知失败: ${(e as Error).message}`)

@@ -8,7 +8,7 @@
 
       <Tabs v-model="tab" class="mt-2 w-full">
         <TabsList class="grid w-full grid-cols-2">
-          <TabsTrigger value="run">运行情况</TabsTrigger>
+          <TabsTrigger value="run">运行监控</TabsTrigger>
           <TabsTrigger value="jobs">Job 管理</TabsTrigger>
         </TabsList>
       </Tabs>
