@@ -1,0 +1,238 @@
+import { joinUrl, normalizeJobPath, sleep, trimJenkinsBase } from './jenkins-utils'
+
+/** UTF-8 安全，兼容非 ASCII 用户名/密码/Token 片段 */
+function toBase64Basic(raw: string): string {
+  const b = new TextEncoder().encode(raw)
+  let bin = ''
+  for (const c of b) {
+    bin += String.fromCharCode(c)
+  }
+  return btoa(bin)
+}
+
+function basicAuthHeader(user: string, token: string): string {
+  return `Basic ${toBase64Basic(`${user}:${token}`)}`
+}
+
+export interface JobParameterDefinition {
+  name?: string
+  type?: string
+  choices?: string[]
+}
+
+/**
+ * 从 Jenkins job api/json 中读取 Choice 参数的 choices。
+ * 等价于：
+ * /api/json?pretty=true&tree=property[parameterDefinitions[name,type,choices]]
+ */
+export async function fetchChoiceParameterChoices(
+  jenkinsBase: string,
+  user: string,
+  token: string,
+  jobPath: string,
+  paramName: string
+): Promise<string[]> {
+  const base = trimJenkinsBase(jenkinsBase)
+  const path = `${normalizeJobPath(jobPath)}/api/json?pretty=true&tree=property[parameterDefinitions[name,type,choices]]`
+  const url = joinUrl(base, path)
+  const r = await fetch(url, { headers: { Authorization: basicAuthHeader(user, token) } })
+  const text = await r.text().catch(() => '')
+  try {
+    const j = JSON.parse(text) as any
+    const props: any[] = Array.isArray(j?.property) ? j.property : []
+    for (const p of props) {
+      const defs: JobParameterDefinition[] = Array.isArray(p?.parameterDefinitions) ? p.parameterDefinitions : []
+      const hit = defs.find((d) => d?.name === paramName)
+      if (hit && Array.isArray(hit.choices)) {
+        return hit.choices.map((s) => String(s).trim()).filter(Boolean)
+      }
+    }
+    return []
+  } catch {
+    throw new Error(`读取 choices 失败: ${r.status} ${(text || '').slice(0, 200)}`)
+  }
+}
+
+export interface Crumb {
+  crumbRequestField: string
+  crumb: string
+}
+
+export async function fetchCrumb(
+  jenkinsBase: string,
+  user: string,
+  token: string
+): Promise<Crumb | null> {
+  const u = joinUrl(jenkinsBase, 'crumbIssuer/api/json')
+  const r = await fetch(u, { headers: { Authorization: basicAuthHeader(user, token) } })
+  if (!r.ok) return null
+  return (await r.json()) as Crumb
+}
+
+/**
+ * 触发参数化构建，返回 queue item 的 `.../queue/item/xxx/api/json` URL
+ */
+export async function triggerParameterizedBuild(
+  jenkinsBase: string,
+  user: string,
+  token: string,
+  jobPath: string,
+  params: Record<string, string>
+): Promise<string> {
+  const base = trimJenkinsBase(jenkinsBase)
+  const path = `${normalizeJobPath(jobPath)}/buildWithParameters`
+  const url = joinUrl(base, path)
+  const body = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null) body.set(k, v)
+  }
+
+  const auth = basicAuthHeader(user, token)
+  const post = async (crumbH?: Crumb) => {
+    const headers: Record<string, string> = {
+      Authorization: auth,
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    }
+    if (crumbH) {
+      headers[crumbH.crumbRequestField] = crumbH.crumb
+    }
+    return fetch(url, { method: 'POST', headers, body: body.toString() })
+  }
+
+  let r = await post()
+  if (r.status === 403) {
+    const t = await r.text()
+    if (/no valid crumb|valid crumb|csrf|crumb/i.test(t) || t.length < 1) {
+      const c = await fetchCrumb(base, user, token)
+      if (c) {
+        r = await post(c)
+      }
+    } else {
+      r = new Response(t, { status: 403, statusText: r.statusText })
+    }
+  }
+
+  if (r.status !== 201 && r.status !== 200) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`触发构建失败: ${r.status} ${(t || '').slice(0, 400)}`)
+  }
+
+  const loc = r.headers.get('location')
+  if (!loc) {
+    throw new Error('Jenkins 未返回 Location 队列头。请检查任务是否启用参数化、参数名与 Jenkins 一致。')
+  }
+  return toQueueItemApiUrl(base, loc)
+}
+
+function toQueueItemApiUrl(jenkinsBase: string, location: string): string {
+  const origin = new URL(trimJenkinsBase(jenkinsBase)).origin
+  let p = location.trim()
+  if (p.startsWith('/')) p = origin + p
+  p = p.replace(/\/$/, '')
+  if (!p.endsWith('/api/json')) p += '/api/json'
+  return p
+}
+
+export interface QueueItemJson {
+  cancel?: boolean
+  why?: string | null
+  executable?: { number: number; url: string } | null
+}
+
+export async function pollQueueItem(
+  queueItemApiUrl: string,
+  user: string,
+  token: string,
+  opts: { maxWaitMs?: number; intervalMs?: number } = {}
+): Promise<{ buildNumber: number; buildUrl: string }> {
+  const { maxWaitMs = 2 * 60 * 60 * 1000, intervalMs = 2000 } = opts
+  const auth = basicAuthHeader(user, token)
+  const start = Date.now()
+  for (;;) {
+    if (Date.now() - start > maxWaitMs) {
+      throw new Error('等待 Jenkins 入队超时')
+    }
+    const r = await fetch(queueItemApiUrl, { headers: { Authorization: auth } })
+    if (!r.ok) {
+      const t = await r.text()
+      throw new Error(`轮询队列失败: ${r.status} ${t.slice(0, 200)}`)
+    }
+    const j = (await r.json()) as QueueItemJson
+    if (j.executable) {
+      return { buildNumber: j.executable.number, buildUrl: j.executable.url }
+    }
+    if (j.cancel) {
+      throw new Error('队列项已取消')
+    }
+    await sleep(intervalMs)
+  }
+}
+
+export interface BuildJson {
+  building: boolean
+  result: string | null
+  number: number
+  url: string
+}
+
+export async function fetchBuildJson(buildUrl: string, user: string, token: string): Promise<BuildJson> {
+  const u = buildUrl.replace(/\/?$/, '') + '/api/json'
+  const r = await fetch(u, { headers: { Authorization: basicAuthHeader(user, token) } })
+  if (!r.ok) {
+    const t = await r.text()
+    throw new Error(`读取构建信息失败: ${r.status} ${t.slice(0, 200)}`)
+  }
+  return (await r.json()) as BuildJson
+}
+
+export async function pollBuildFinished(
+  buildUrl: string,
+  user: string,
+  token: string,
+  opts: { maxWaitMs?: number; intervalMs?: number } = {}
+): Promise<BuildJson> {
+  const { maxWaitMs = 2 * 60 * 60 * 1000, intervalMs = 2000 } = opts
+  const start = Date.now()
+  for (;;) {
+    if (Date.now() - start > maxWaitMs) {
+      throw new Error('等待构建结束超时')
+    }
+    const b = await fetchBuildJson(buildUrl, user, token)
+    if (!b.building && b.result) {
+      return b
+    }
+    await sleep(intervalMs)
+  }
+}
+
+export function buildJobPageUrl(jenkinsBase: string, jobPath: string): string {
+  return joinUrl(trimJenkinsBase(jenkinsBase), normalizeJobPath(jobPath) + '/')
+}
+
+/** “Build with Parameters” 页面（HTML），用于从页面抓取动态参数选项 */
+export function buildWithParamsPageUrl(jenkinsBase: string, jobPath: string): string {
+  return joinUrl(trimJenkinsBase(jenkinsBase), normalizeJobPath(jobPath) + '/build?delay=0sec')
+}
+
+export async function fetchBuildWithParamsPageHtml(
+  jenkinsBase: string,
+  user: string,
+  token: string,
+  jobPath: string,
+  overrideUrl?: string
+): Promise<string> {
+  const base = trimJenkinsBase(jenkinsBase)
+  const url = overrideUrl
+    ? /^https?:\/\//i.test(overrideUrl.trim())
+      ? overrideUrl.trim()
+      : joinUrl(base, overrideUrl)
+    : buildWithParamsPageUrl(base, jobPath)
+  // 注意：用于解析 DOM 的页面抓取不要强依赖 200/ok。
+  // Jenkins 可能返回 403/302/错误页，但我们仍然希望拿到 HTML 来解析/诊断。
+  const r = await fetch(url, { headers: { Authorization: basicAuthHeader(user, token) } })
+  const t = await r.text().catch(() => '')
+  if (!t) {
+    throw new Error(`读取参数页无内容: ${r.status}`)
+  }
+  return t
+}
