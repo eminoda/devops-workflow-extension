@@ -29,6 +29,10 @@
 
 ![与 Jenkins CD 对比](docs/4.png)
 
+### 5）企微效果图
+
+![企微效果图](docs/5.png)
+
 ## 本地开发与加载扩展
 
 1. 安装依赖：`pnpm install`
