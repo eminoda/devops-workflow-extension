@@ -2,7 +2,7 @@
   <div class="h-full min-h-0 w-full overflow-hidden rounded-[12px] bg-background text-foreground flex flex-col">
     <header class="px-2.5 pt-2">
       <div class="flex items-center justify-between">
-        <div class="text-sm font-semibold tracking-tight">DevOps Workflow</div>
+        <div class="text-sm font-semibold tracking-tight">Jenkins Runner</div>
         <div class="text-xs text-muted-foreground">Jenkins</div>
       </div>
 

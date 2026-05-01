@@ -1,4 +1,4 @@
-# devops-workflow
+# jenkins-runner-extension
 
 **Jenkins CI/CD 自动化构建插件**（浏览器扩展）：把常用 Jenkins Job 与参数保存下来，一键触发构建/发布，自动跟踪状态并聚合执行结果，减少反复登录 Jenkins、手工盯构建页面的成本。
 

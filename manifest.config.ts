@@ -4,7 +4,7 @@ import { defineManifest } from '@crxjs/vite-plugin'
 const version = '0.1.0'
 
 export default defineManifest({
-  name: 'DevOps Workflow',
+  name: 'Jenkins Runner',
   description: 'Jenkins 轻量编排与状态跟进',
   version,
   manifest_version: 3,
@@ -22,7 +22,7 @@ export default defineManifest({
   permissions: ['storage', 'tabs', 'alarms'],
   host_permissions: ['http://*/*', 'https://*/*'],
   action: {
-    default_title: 'DevOps Workflow',
+    default_title: 'Jenkins Runner',
     default_popup: 'src/popup.html',
     default_icon: {
       16: 'src/assets/icons/icon-16.png',

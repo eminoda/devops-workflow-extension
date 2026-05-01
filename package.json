@@ -1,5 +1,5 @@
 {
-  "name": "devops-workflow",
+  "name": "jenkins-runner-extension",
   "type": "module",
   "version": "0.1.0",
   "private": true,

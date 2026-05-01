@@ -30,10 +30,10 @@ jobs:
       - name: Package dist
         run: |
           cd dist
-          zip -r "../devops-workflow-dist-${{ github.ref_name }}.zip" .
+          zip -r "../jenkins-runner-extension-dist-${{ github.ref_name }}.zip" .
 
       - name: Create GitHub Release and upload dist zip
         uses: softprops/action-gh-release@v2
         with:
-          files: devops-workflow-dist-${{ github.ref_name }}.zip
+          files: jenkins-runner-extension-dist-${{ github.ref_name }}.zip
           generate_release_notes: true
