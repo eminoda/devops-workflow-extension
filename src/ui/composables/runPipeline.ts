@@ -65,6 +65,7 @@ export async function runJobAndMaybeChain(
     result: null,
     error: null,
     buildUrl: null,
+    queueItemApiUrl: null,
   }
   await appendRun(rec)
   log?.(`[${chainDepth > 0 ? '链式' : '开始'}] ${job.name} 触发中…`)
@@ -95,14 +96,21 @@ export async function runJobAndMaybeChain(
       job.jobPath,
       params,
     )
+    await updateRun(runId, { queueItemApiUrl: queueUrl })
     log?.('已入队，等待分配构建号…')
     const q = await pollQueueItem(queueUrl, settings.jenkinsUser, settings.jenkinsToken)
     finalBuildUrl = q.buildUrl
     finalBuildNumber = q.buildNumber
-    await updateRun(runId, { buildUrl: finalBuildUrl, buildNumber: finalBuildNumber })
+    await updateRun(runId, {
+      buildUrl: finalBuildUrl,
+      buildNumber: finalBuildNumber,
+      queueItemApiUrl: null,
+    })
     if (finalBuildUrl) onBuildAllocated?.({ buildUrl: finalBuildUrl, buildNumber: finalBuildNumber })
     log?.(`已分配 #${finalBuildNumber}，等待结束…`)
-    const b = await pollBuildFinished(q.buildUrl, settings.jenkinsUser, settings.jenkinsToken)
+    const b = await pollBuildFinished(q.buildUrl, settings.jenkinsUser, settings.jenkinsToken, {
+      jenkinsBase: settings.jenkinsUrl,
+    })
     result = normalizedJenkinsBuildResult(b.result)
     if (result === 'SUCCESS') {
       const list = await loadJobs()
@@ -119,13 +127,18 @@ export async function runJobAndMaybeChain(
     result = 'FAILURE'
     log?.(errMsg)
   } finally {
-    await updateRun(runId, {
+    const endPatch: Partial<
+      Pick<RunRecord, 'endTime' | 'result' | 'error' | 'buildUrl' | 'buildNumber'>
+    > = {
       endTime: Date.now(),
       result,
       error: errMsg,
-      buildUrl: finalBuildUrl,
-      buildNumber: finalBuildNumber,
-    })
+    }
+    if (finalBuildUrl != null && String(finalBuildUrl).trim() !== '') {
+      endPatch.buildUrl = finalBuildUrl
+      if (finalBuildNumber != null) endPatch.buildNumber = finalBuildNumber
+    }
+    await updateRun(runId, endPatch)
   }
 
   if (!errMsg && result === 'SUCCESS' && job.verifyUrl?.trim()) {

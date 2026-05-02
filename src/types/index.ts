@@ -72,8 +72,13 @@ export interface RunRecord {
   buildNumber: number | null
   result: BuildResult
   error: string | null
-  /** Jenkins 构建页，用于打开标签 */
+  /** Jenkins 构建页，用于打开标签与 api/json 轮询 */
   buildUrl: string | null
+  /**
+   * 触发构建后 Jenkins 返回的队列项 `.../queue/item/xxx/api/json`，入队后、分配到构建号前即写入。
+   * 用于扩展关闭后仍可通过队列 API 补全 buildUrl。
+   */
+  queueItemApiUrl?: string | null
 }
 
 export const defaultSettings = (): JenkinsSettings => ({

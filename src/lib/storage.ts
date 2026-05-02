@@ -1,6 +1,8 @@
-import { fetchBuildJson } from '@/lib/jenkins'
+import { fetchBuildJson, fetchQueueItemJson } from '@/lib/jenkins'
 import type { BuildResult, JobConfig, JenkinsSettings, RunRecord } from '@/types'
 import { defaultSettings } from '@/types'
+
+const JR_LOG = '[JenkinsRunner]'
 
 function normalizeJenkinsResultLabel(raw: string | null | undefined): BuildResult {
   if (raw == null || String(raw).trim() === '') return null
@@ -14,35 +16,110 @@ function normalizeJenkinsResultLabel(raw: string | null | undefined): BuildResul
  * 用于修复弹窗关闭、updateRun 未命中等导致的「一直执行中」与 curl 实际结果不一致。
  */
 export async function reconcileStaleRunRecords(settings: JenkinsSettings): Promise<boolean> {
-  if (!settings.jenkinsUrl?.trim() || !settings.jenkinsUser || !settings.jenkinsToken) return false
+  if (
+    !settings.jenkinsUrl?.trim() ||
+    !String(settings.jenkinsUser ?? '').trim() ||
+    !String(settings.jenkinsToken ?? '').trim()
+  ) {
+    console.warn(`${JR_LOG} reconcile 跳过：Jenkins 连接信息不完整`, {
+      hasUrl: !!settings.jenkinsUrl?.trim(),
+      hasUser: !!String(settings.jenkinsUser ?? '').trim(),
+      hasToken: !!String(settings.jenkinsToken ?? '').trim(),
+    })
+    return false
+  }
 
   const list = await loadHistory()
+  console.log(`${JR_LOG} reconcile 开始`, { historyCount: list.length })
   const { jenkinsUser: user, jenkinsToken: token } = settings
 
   let changed = false
   const merged = await Promise.all(
-    list.map(async (r) => {
-      if (r.endTime != null || r.result != null || !r.buildUrl?.trim()) return r
+    list.map(async (r0) => {
+      let r: RunRecord = { ...r0 }
+      if (r.endTime != null) return r
+
+      // ① 尚无 buildUrl，但有入队时写入的 queueItemApiUrl：先请求队列项，补全 buildUrl
+      if (!r.buildUrl?.trim() && r.queueItemApiUrl?.trim()) {
+        try {
+          const j = await fetchQueueItemJson(r.queueItemApiUrl!, user, token)
+          if (j.executable?.url) {
+            changed = true
+            r = {
+              ...r,
+              buildUrl: j.executable.url,
+              buildNumber: typeof j.executable.number === 'number' ? j.executable.number : r.buildNumber,
+              queueItemApiUrl: null,
+            }
+            console.log(`${JR_LOG} reconcile 从队列 API 补全 buildUrl`, {
+              id: r.id,
+              jobName: r.jobName,
+            })
+          } else if (j.cancel) {
+            changed = true
+            console.log(`${JR_LOG} reconcile 队列项已取消`, { id: r.id, jobName: r.jobName })
+            return {
+              ...r,
+              endTime: Date.now(),
+              result: 'FAILURE' as BuildResult,
+              error: r.error ?? '队列项已取消',
+              queueItemApiUrl: null,
+            }
+          }
+        } catch (e) {
+          console.warn(`${JR_LOG} reconcile 队列项请求失败`, {
+            id: r.id,
+            message: (e as Error).message,
+          })
+        }
+      }
+
+      if (!r.buildUrl?.trim()) {
+        if (r.endTime == null && !r.queueItemApiUrl?.trim()) {
+          console.warn(
+            `${JR_LOG} 本条记录既无 buildUrl 也无 queueItemApiUrl，无法向 Jenkins 查询；请重新触发一次构建（旧数据无队列信息）。`,
+            { recordId: r.id, jobName: r.jobName, jobId: r.jobId },
+          )
+        }
+        return r
+      }
+
+      // ② 已有 buildUrl：拉取该次构建 api/json
       try {
-        const b = await fetchBuildJson(r.buildUrl!, user, token)
-        const result = normalizeJenkinsResultLabel(b.result)
-        if (!b.building && result) {
+        const b = await fetchBuildJson(r.buildUrl!, user, token, settings.jenkinsUrl)
+        if (!b.building) {
+          const result = normalizeJenkinsResultLabel(b.result)
           changed = true
+          console.log(`${JR_LOG} reconcile 构建已结束，写入本地`, {
+            id: r.id,
+            jobName: r.jobName,
+            result: result ?? 'FAILURE',
+          })
           return {
             ...r,
             endTime: Date.now(),
-            result,
+            result: result ?? 'FAILURE',
             buildNumber: typeof b.number === 'number' ? b.number : r.buildNumber,
           }
         }
-      } catch {
-        /* 网络/鉴权失败等，跳过 */
+        console.log(`${JR_LOG} reconcile Jenkins 仍 building=true`, {
+          id: r.id,
+          jobName: r.jobName,
+          jenkinsResult: b.result,
+        })
+      } catch (e) {
+        console.warn(`${JR_LOG} reconcile 请求失败`, {
+          id: r.id,
+          jobName: r.jobName,
+          message: (e as Error).message,
+        })
       }
       return r
     }),
   )
 
   if (changed) await saveHistory(merged)
+  console.log(`${JR_LOG} reconcile 结束`, { changed, saved: changed })
   return changed
 }
 
@@ -191,7 +268,9 @@ export async function appendRun(item: RunRecord): Promise<void> {
 
 export async function updateRun(
   id: string,
-  patch: Partial<Pick<RunRecord, 'endTime' | 'buildNumber' | 'result' | 'error' | 'buildUrl'>>
+  patch: Partial<
+    Pick<RunRecord, 'endTime' | 'buildNumber' | 'result' | 'error' | 'buildUrl' | 'queueItemApiUrl'>
+  >,
 ): Promise<void> {
   const cur = await loadHistory()
   const i = cur.findIndex((r) => r.id === id)

@@ -30,13 +30,59 @@
 
       <div v-else class="space-y-2">
         <Card v-for="h in history" :key="h.id" class="border-border/80">
-          <CardContent class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div class="min-w-0">
+          <CardContent class="flex flex-row items-start gap-3 py-3">
+            <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
                 <span class="font-medium">{{ h.jobName || 'Job' }}</span>
                 <span v-if="h.buildNumber" class="text-xs text-muted-foreground">#{{ h.buildNumber }}</span>
-                <Badge v-if="isRunningRow(h)" variant="secondary">执行中</Badge>
-                <Badge v-else-if="h.result" :variant="badgeVariant(h.result)">{{ h.result }}</Badge>
+                <span
+                  v-if="isRunningRow(h)"
+                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border/80 bg-muted/40 text-foreground"
+                  title="执行中"
+                  aria-label="执行中"
+                >
+                  <Loader2 class="h-4 w-4 shrink-0 animate-spin text-primary" aria-hidden="true" />
+                </span>
+                <span
+                  v-else-if="h.result === 'SUCCESS'"
+                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-green-600/25 bg-green-500/10 text-green-700 dark:text-green-400"
+                  title="成功"
+                  aria-label="成功"
+                >
+                  <CheckCircle2 class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" aria-hidden="true" />
+                </span>
+                <span
+                  v-else-if="h.result === 'FAILURE'"
+                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-destructive/30 bg-destructive/10 text-destructive"
+                  title="失败"
+                  aria-label="失败"
+                >
+                  <XCircle class="h-4 w-4 shrink-0" aria-hidden="true" />
+                </span>
+                <span
+                  v-else-if="h.result === 'UNSTABLE'"
+                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-400"
+                  title="不稳定"
+                  aria-label="不稳定"
+                >
+                  <AlertTriangle class="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+                </span>
+                <span
+                  v-else-if="h.result === 'ABORTED'"
+                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-muted-foreground/30 bg-muted/50 text-muted-foreground"
+                  title="已中止"
+                  aria-label="已中止"
+                >
+                  <Ban class="h-4 w-4 shrink-0" aria-hidden="true" />
+                </span>
+                <span
+                  v-else-if="h.result"
+                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40"
+                  :title="String(h.result)"
+                  :aria-label="String(h.result)"
+                >
+                  <CircleDot class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </span>
               </div>
               <div class="mt-1 text-xs text-muted-foreground">
                 {{ formatTime(h.startTime) }}
@@ -44,7 +90,10 @@
               </div>
               <div v-if="h.error" class="mt-1 break-all text-xs text-destructive">{{ h.error }}</div>
             </div>
-            <div v-if="h.buildUrl" class="flex shrink-0 items-center gap-1">
+            <div
+              v-if="h.buildUrl"
+              class="ml-auto flex shrink-0 items-center gap-1 self-center"
+            >
               <Button variant="outline" size="icon" type="button" title="打开构建页" @click="openUrl(h.buildUrl!)">
                 <ExternalLink class="h-4 w-4" />
               </Button>
@@ -83,15 +132,23 @@
 </template>
 
 <script setup lang="ts">
-import { ExternalLink, Square } from 'lucide-vue-next'
+import {
+  AlertTriangle,
+  Ban,
+  CheckCircle2,
+  CircleDot,
+  ExternalLink,
+  Loader2,
+  Square,
+  XCircle,
+} from 'lucide-vue-next'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { stopJenkinsBuild } from '@/lib/jenkins'
 import { clearRunHistory, loadHistory, loadSettings, reconcileStaleRunRecords } from '@/lib/storage'
-import type { BuildResult, RunRecord } from '@/types'
+import type { RunRecord } from '@/types'
 import { pipelineUiActiveBuildUrl, pipelineUiBusy, pipelineUiLog } from '@/ui/composables/pipelineUiState'
 import { openUrlInNewTab } from '@/ui/composables/runPipeline'
 import { toast } from '@/ui/toast'
@@ -114,10 +171,13 @@ function isRunningRow(h: RunRecord) {
 
 /** 在运行监控页且存在「执行中」时，定时向 Jenkins 拉取构建状态并 reconcile */
 const needsJenkinsPoll = computed(() => {
-  const p = route.path
-  if (p !== '/' && p !== '') return false
+  if (route.name !== 'dashboard') return false
   if (pipelineUiBusy.value) return true
-  return history.value.some((h) => isRunningRow(h) && !!(h.buildUrl ?? '').trim())
+  return history.value.some(
+    (h) =>
+      isRunningRow(h) &&
+      (!!(h.buildUrl ?? '').trim() || !!(h.queueItemApiUrl ?? '').trim()),
+  )
 })
 
 let jenkinsPollTimer: ReturnType<typeof setInterval> | null = null
@@ -125,6 +185,14 @@ let jenkinsPollTimer: ReturnType<typeof setInterval> | null = null
 watch(
   needsJenkinsPoll,
   (need) => {
+    console.log('[JenkinsRunner] needsJenkinsPoll', {
+      need,
+      routeName: route.name,
+      pipelineBusy: pipelineUiBusy.value,
+      runningWithBuildUrl: history.value.filter(
+        (h) => isRunningRow(h) && !!(h.buildUrl ?? '').trim(),
+      ).length,
+    })
     if (jenkinsPollTimer) {
       clearInterval(jenkinsPollTimer)
       jenkinsPollTimer = null
@@ -147,11 +215,14 @@ function goJobs() {
   void router.push('/jobs')
 }
 
-/** 每次进入运行监控路由（/）时默认拉取历史并对 Jenkins 做一次 reconcile */
+/** 每次进入运行监控路由时拉取历史并向 Jenkins reconcile */
 watch(
-  () => route.path,
-  (p) => {
-    if (p === '/' || p === '') void loadHist()
+  () => route.name,
+  (name) => {
+    if (name === 'dashboard') {
+      console.log('[JenkinsRunner] 进入运行监控路由，触发 loadHist')
+      void loadHist()
+    }
   },
   { immediate: true },
 )
@@ -163,19 +234,18 @@ watch(pipelineUiBusy, async (busy, wasBusy) => {
 })
 
 async function loadHist() {
+  console.log('[JenkinsRunner] loadHist 开始')
   const s = await loadSettings()
-  await reconcileStaleRunRecords(s)
+  const reconciled = await reconcileStaleRunRecords(s)
   history.value = await loadHistory()
+  console.log('[JenkinsRunner] loadHist 结束', {
+    reconcileReturned: reconciled,
+    historyLength: history.value.length,
+  })
 }
 
 function formatTime(t: number) {
   return new Date(t).toLocaleString()
-}
-
-function badgeVariant(r: BuildResult): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (r === 'SUCCESS') return 'outline'
-  if (r === 'UNSTABLE') return 'secondary'
-  return 'destructive'
 }
 
 function openUrl(u: string) {

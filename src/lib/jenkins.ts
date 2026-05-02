@@ -174,25 +174,34 @@ export interface QueueItemJson {
   executable?: { number: number; url: string } | null
 }
 
+/** 单次 GET 队列项 JSON（不等待）；用于 reconcile 从 queueItemApiUrl 补全 buildUrl */
+export async function fetchQueueItemJson(
+  queueItemApiUrl: string,
+  user: string,
+  token: string,
+): Promise<QueueItemJson> {
+  const auth = basicAuthHeader(user, token)
+  const r = await fetch(queueItemApiUrl, { headers: { Authorization: auth } })
+  if (!r.ok) {
+    const t = await r.text()
+    throw new Error(`读取队列项失败: ${r.status} ${t.slice(0, 200)}`)
+  }
+  return (await r.json()) as QueueItemJson
+}
+
 export async function pollQueueItem(
   queueItemApiUrl: string,
   user: string,
   token: string,
-  opts: { maxWaitMs?: number; intervalMs?: number } = {}
+  opts: { maxWaitMs?: number; intervalMs?: number } = {},
 ): Promise<{ buildNumber: number; buildUrl: string }> {
   const { maxWaitMs = 2 * 60 * 60 * 1000, intervalMs = 2000 } = opts
-  const auth = basicAuthHeader(user, token)
   const start = Date.now()
   for (;;) {
     if (Date.now() - start > maxWaitMs) {
       throw new Error('等待 Jenkins 入队超时')
     }
-    const r = await fetch(queueItemApiUrl, { headers: { Authorization: auth } })
-    if (!r.ok) {
-      const t = await r.text()
-      throw new Error(`轮询队列失败: ${r.status} ${t.slice(0, 200)}`)
-    }
-    const j = (await r.json()) as QueueItemJson
+    const j = await fetchQueueItemJson(queueItemApiUrl, user, token)
     if (j.executable) {
       return { buildNumber: j.executable.number, buildUrl: j.executable.url }
     }
@@ -210,11 +219,26 @@ export interface BuildJson {
   url: string
 }
 
-export async function fetchBuildJson(buildUrl: string, user: string, token: string): Promise<BuildJson> {
-  const u = buildUrl.replace(/\/?$/, '') + '/api/json'
+/**
+ * @param jenkinsBase 可选；当 buildUrl 为站点内相对路径（常见于 queue api 返回的 executable.url）时，
+ * 扩展页内 fetch 必须拼成绝对 URL，否则会相对 chrome-extension:// 发请求导致失败。
+ */
+export async function fetchBuildJson(
+  buildUrl: string,
+  user: string,
+  token: string,
+  jenkinsBase?: string,
+): Promise<BuildJson> {
+  let root = buildUrl.trim()
+  if (jenkinsBase?.trim() && !/^https?:\/\//i.test(root)) {
+    root = resolveJenkinsRequestUrl(jenkinsBase, root)
+  }
+  const u = root.replace(/\/?$/, '') + '/api/json'
+  console.log('[JenkinsRunner] fetchBuildJson', { url: u })
   const r = await fetch(u, { headers: { Authorization: basicAuthHeader(user, token) } })
   if (!r.ok) {
     const t = await r.text()
+    console.warn('[JenkinsRunner] fetchBuildJson HTTP 非 2xx', { url: u, status: r.status })
     throw new Error(`读取构建信息失败: ${r.status} ${t.slice(0, 200)}`)
   }
   return (await r.json()) as BuildJson
@@ -224,15 +248,15 @@ export async function pollBuildFinished(
   buildUrl: string,
   user: string,
   token: string,
-  opts: { maxWaitMs?: number; intervalMs?: number } = {}
+  opts: { maxWaitMs?: number; intervalMs?: number; jenkinsBase?: string } = {},
 ): Promise<BuildJson> {
-  const { maxWaitMs = 2 * 60 * 60 * 1000, intervalMs = 2000 } = opts
+  const { maxWaitMs = 2 * 60 * 60 * 1000, intervalMs = 2000, jenkinsBase } = opts
   const start = Date.now()
   for (;;) {
     if (Date.now() - start > maxWaitMs) {
       throw new Error('等待构建结束超时')
     }
-    const b = await fetchBuildJson(buildUrl, user, token)
+    const b = await fetchBuildJson(buildUrl, user, token, jenkinsBase)
     if (!b.building && b.result) {
       return b
     }
