@@ -214,6 +214,77 @@ export function buildWithParamsPageUrl(jenkinsBase: string, jobPath: string): st
   return joinUrl(trimJenkinsBase(jenkinsBase), normalizeJobPath(jobPath) + '/build?delay=0sec')
 }
 
+/** 将 Jenkins 站点内相对路径或绝对 URL 转为可请求的完整 URL */
+export function resolveJenkinsRequestUrl(jenkinsBase: string, pathOrUrl: string): string {
+  const p = pathOrUrl.trim()
+  if (/^https?:\/\//i.test(p)) return p
+  return joinUrl(trimJenkinsBase(jenkinsBase), p.replace(/^\//, ''))
+}
+
+/**
+ * 解析 Jenkins descriptor fillUrl（如 GitParameter fillValueItems）返回的 JSON 中的选项。
+ * 兼容 `values` 为 string[] 或 `{ name, value }[]` 等常见 Stapler 形态。
+ */
+export function parseFillUrlValuesJson(text: string): string[] {
+  let data: unknown
+  try {
+    data = JSON.parse(text) as unknown
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  const pushStr = (s: unknown) => {
+    const v = String(s ?? '').trim()
+    if (v) out.push(v)
+  }
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (typeof item === 'string') pushStr(item)
+      else if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>
+        pushStr(o.value ?? o.name ?? o.Value ?? o.Name)
+      }
+    }
+    return [...new Set(out)]
+  }
+
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>
+    const values = o.values ?? o.Vals
+    if (!Array.isArray(values)) return []
+
+    for (const item of values) {
+      if (typeof item === 'string') pushStr(item)
+      else if (item && typeof item === 'object') {
+        const row = item as Record<string, unknown>
+        pushStr(row.value ?? row.name ?? row.Value ?? row.Name)
+      }
+    }
+  }
+  return [...new Set(out)]
+}
+
+/** 等价 curl -u user:token fillUrl，取 JSON 中的 values 作为下拉选项 */
+export async function fetchJenkinsFillUrlOptions(
+  jenkinsBase: string,
+  user: string,
+  token: string,
+  fillUrl: string,
+): Promise<string[]> {
+  const url = resolveJenkinsRequestUrl(jenkinsBase, fillUrl)
+  const r = await fetch(url, { headers: { Authorization: basicAuthHeader(user, token) } })
+  const text = await r.text().catch(() => '')
+  if (!r.ok) {
+    throw new Error(`HTTP ${r.status}: ${(text || '').slice(0, 240)}`)
+  }
+  const opts = parseFillUrlValuesJson(text)
+  if (!opts.length && text.trim().startsWith('<')) {
+    throw new Error('返回了 HTML 而非 JSON（可能被重定向到登录页）')
+  }
+  return opts
+}
+
 export async function fetchBuildWithParamsPageHtml(
   jenkinsBase: string,
   user: string,

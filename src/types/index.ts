@@ -23,7 +23,7 @@ export interface JobConfig {
   /** 成功后自动触发的下一个 Job id，无则 null */
   nextJobId: string | null
   lastSuccessParams: Record<string, string> | null
-  /** 验证站点 URL，成功时可在列表中「打开」 */
+  /** 构建成功后自动在浏览器打开；也可在列表中手动打开 */
   verifyUrl: string
 }
 
@@ -37,6 +37,10 @@ export interface JobParamConfig {
    * - false: 运行时不再刷新，直接使用已保存的 displayParams
    */
   dynamicLatest?: boolean
+  /**
+   * 仅对 choice 生效：执行时是否从 Jenkins 参数页重新抓取该下拉的首项（默认 false）
+   */
+  choiceLatest?: boolean
 }
 
 export interface JobParamAutoFillRule {

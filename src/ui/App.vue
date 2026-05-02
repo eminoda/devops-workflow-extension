@@ -1,15 +1,17 @@
-﻿<template>
+<template>
   <div class="h-full min-h-0 w-full overflow-hidden rounded-[12px] bg-background text-foreground flex flex-col">
     <header class="px-2.5 pt-2">
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between gap-2">
         <div class="text-sm font-semibold tracking-tight">Jenkins Runner</div>
-        <div class="text-xs text-muted-foreground">Jenkins</div>
+        <Button variant="ghost" size="icon" type="button" class="shrink-0" title="设置" @click="settingsOpen = true">
+          <Settings class="h-4 w-4" />
+        </Button>
       </div>
 
       <Tabs v-model="tab" class="mt-2 w-full">
         <TabsList class="grid w-full grid-cols-2">
           <TabsTrigger value="run">运行监控</TabsTrigger>
-          <TabsTrigger value="jobs">Job 管理</TabsTrigger>
+          <TabsTrigger value="jobs">Jobs 管理</TabsTrigger>
         </TabsList>
       </Tabs>
     </header>
@@ -20,13 +22,11 @@
       </ScrollArea>
     </main>
 
-    <footer class="px-2.5 py-1.5 border-t border-border bg-background flex items-center justify-between text-xs">
-      <div class="text-muted-foreground truncate max-w-[60%]">
-        {{ username ? `用户：${username}` : '未配置用户名' }}
-      </div>
-      <Button variant="ghost" size="icon" type="button" title="设置" @click="settingsOpen = true">
-        <Settings class="h-4 w-4" />
-      </Button>
+    <footer
+      v-if="username"
+      class="px-2.5 py-1.5 border-t border-border bg-background flex items-center text-xs text-muted-foreground"
+    >
+      <div class="truncate">用户：{{ username }}</div>
     </footer>
 
     <Sheet v-model:open="settingsOpen">

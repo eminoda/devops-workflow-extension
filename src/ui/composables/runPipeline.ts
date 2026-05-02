@@ -117,6 +117,11 @@ export async function runJobAndMaybeChain(
     })
   }
 
+  if (!errMsg && result === 'SUCCESS' && job.verifyUrl?.trim()) {
+    log?.('构建成功，正在打开验证地址…')
+    openUrlInNewTab(job.verifyUrl.trim())
+  }
+
   const wh2 = webhookForJob(settings)
   if (wh2) {
     const jobPage = buildJobPageUrl(settings.jenkinsUrl, job.jobPath)

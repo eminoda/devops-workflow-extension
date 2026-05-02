@@ -18,11 +18,12 @@ export default defineConfig({
       },
     }),
     presetAnimations(),
-    // zinc 中性底 + 在 src/assets/index.css 覆盖 primary 为 Material 蓝
+    // shadcn 绿色主色（builtinColors 之一，与 components.json baseColor 一致）
     presetShadcn(
       {
-        color: 'zinc',
-        radius: 'md',
+        color: 'green',
+        // 须为数字（单位 rem），勿用 'md' 字符串，否则会生成非法的 --radius: mdrem
+        radius: 0.5,
       },
       {
         componentLibrary: 'reka',

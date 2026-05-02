@@ -24,6 +24,22 @@
         autocomplete="off"
         required
       />
+      <div
+        v-if="userSecurityHelpUrl"
+        class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <span>不知道如何设置？</span>
+        <a
+          :href="userSecurityHelpUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center justify-center rounded-md p-0.5 text-primary hover:bg-muted/70 hover:text-primary"
+          title="在浏览器中打开 Jenkins 用户安全设置"
+        >
+          <ExternalLink class="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span class="sr-only">跳转至 Jenkins 用户安全设置</span>
+        </a>
+      </div>
     </div>
     <Separator />
     <div class="space-y-2">
@@ -46,11 +62,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { ExternalLink } from 'lucide-vue-next'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { joinUrl } from '@/lib/jenkins-utils'
 import { loadSettings, saveSettings } from '@/lib/storage'
 import type { JenkinsSettings } from '@/types'
 import { defaultSettings } from '@/types'
@@ -60,6 +78,13 @@ const emit = defineEmits<{
 }>()
 
 const form = reactive<JenkinsSettings>({ ...defaultSettings() })
+/** Jenkins 用户 API Token 说明页：{base}/user/{username}/security */
+const userSecurityHelpUrl = computed(() => {
+  const base = form.jenkinsUrl?.trim()
+  const user = form.jenkinsUser?.trim()
+  if (!base || !user) return ''
+  return joinUrl(base, `user/${encodeURIComponent(user)}/security`)
+})
 const saving = ref(false)
 const savedAt = ref('')
 const err = ref('')

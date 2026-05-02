@@ -2,9 +2,8 @@
   <Card class="border-0 shadow-none">
     <CardContent class="flex flex-col items-center justify-center gap-4 py-10 text-center">
       <p class="text-sm text-muted-foreground">当前没有 Jobs</p>
-      <Button type="button" size="sm" @click="$emit('add')">
+      <Button type="button" size="icon" title="添加 Job" @click="$emit('add')">
         <Plus class="h-4 w-4" />
-        添加
       </Button>
     </CardContent>
   </Card>

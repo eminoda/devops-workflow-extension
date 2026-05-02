@@ -1,8 +1,1 @@
 @import '@unocss/reset/tailwind.css';
-
-/* Material 3 风格主色（覆盖 shadcn zinc 主题的 primary，更接近 Material 蓝） */
-:root {
-  --primary: 221 83% 53%;
-  --primary-foreground: 0 0% 100%;
-  --ring: 221 83% 53%;
-}

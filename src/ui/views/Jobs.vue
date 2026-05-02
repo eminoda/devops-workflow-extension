@@ -1,12 +1,11 @@
-﻿<template>
+<template>
   <div class="space-y-4">
     <!-- 列表页 -->
     <template v-if="mode === 'list'">
       <div class="flex items-center justify-between gap-2">
-        <h1 class="text-sm font-semibold">Job 管理</h1>
-        <Button type="button" size="sm" @click="addJobAndOpen">
+        <h1 class="text-sm font-semibold">Jobs 管理</h1>
+        <Button v-if="jobs.length" type="button" size="icon" title="新建 Job" @click="addJobAndOpen">
           <Plus class="h-4 w-4" />
-          新建
         </Button>
       </div>
 
@@ -14,8 +13,8 @@
 
       <div v-else class="space-y-3">
         <Card v-for="j in jobs" :key="j.id" class="border-0 shadow-none">
-          <CardContent class="py-4">
-            <button type="button" class="flex w-full items-center justify-between gap-3 text-left" @click="openDetail(j.id)">
+          <CardContent class="flex items-center gap-2 py-4">
+            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="openDetail(j.id)">
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
                   <div class="truncate text-sm font-medium">{{ j.name || '新 Job' }}</div>
@@ -23,10 +22,25 @@
                 </div>
                 <div class="truncate font-mono text-xs text-muted-foreground">Job：{{ j.jobPath || '（未填写）' }}</div>
               </div>
-              <div class="shrink-0 text-muted-foreground">
-                <ChevronRight class="h-4 w-4" />
-              </div>
             </button>
+            <div class="flex shrink-0 items-center gap-1" @click.stop>
+              <Button type="button" size="icon" variant="outline" title="详情" @click="openDetail(j.id)">
+                <SlidersHorizontal class="h-4 w-4" />
+              </Button>
+              <Button type="button" size="icon" :disabled="pipelineUiBusy" title="运行" @click="runOne(j)">
+                <Play class="h-4 w-4" />
+              </Button>
+              <Button
+                v-if="j.verifyUrl"
+                type="button"
+                size="icon"
+                variant="outline"
+                title="验证地址"
+                @click="openUrlTab(j.verifyUrl!)"
+              >
+                <ExternalLink class="h-4 w-4" />
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -52,187 +66,134 @@
         <CardContent class="space-y-4 pb-20 pt-4">
           <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div class="space-y-2">
-              <Label :for="`path-${curJob.id}`">Jenkins Job 名称</Label>
+              <Label :for="`path-${curJob.id}`">Job 名称</Label>
               <Input
                 :id="`path-${curJob.id}`"
                 v-model="curJob.jobPath"
                 class="font-mono text-xs"
-                placeholder="例如：TEST-admin-web"
-                @input="markDirty(curJob.id)"
+                placeholder="Jenkins Dashboard 中任务的名称"
+                @input="onJobPathInput(curJob)"
               />
             </div>
             <div class="space-y-2">
               <Label :for="`name-${curJob.id}`">别名</Label>
-              <Input :id="`name-${curJob.id}`" v-model="curJob.name" placeholder="默认 Job 名称" @input="markDirty(curJob.id)" />
+              <Input
+                :id="`name-${curJob.id}`"
+                v-model="curJob.name"
+                class="text-xs"
+                placeholder="默认 Job 名称"
+                @input="onJobNameInput(curJob)"
+              />
             </div>
           </div>
 
           <div class="space-y-2">
             <Label>构建参数</Label>
-            <p class="text-xs text-muted-foreground">参数名需与 Jenkins 配置完全一致（大小写敏感）。</p>
+            <p v-if="msg[curJob.id]" class="text-xs text-amber-700">{{ msg[curJob.id] }}</p>
+
+            <div
+              v-if="buildParamsLoading[curJob.id]"
+              class="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-4 text-sm text-muted-foreground"
+            >
+              <Loader2 class="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+              <span>正在加载 Jenkins 参数页…</span>
+            </div>
+
+            <template v-else>
+              <div v-for="(row, idx) in rowCache[curJob.id] || []" :key="idx" class="space-y-1.5">
+                <div class="flex gap-2">
+                  <Input
+                    v-model="row.k"
+                    class="min-w-0 flex-[3] font-mono text-xs"
+                    placeholder="如：branch"
+                    @input="onRowChange(curJob)"
+                  />
+
+                  <template v-if="row.t !== 'text' && getParamOptions(curJob.id, row.k, row.t).length">
+                    <select
+                      :class="cn(selectCls, 'min-w-0 flex-[7] text-xs')"
+                      :value="row.v"
+                      @change="onParamOptionSelected($event, curJob, row)"
+                    >
+                      <option v-for="opt in getParamOptions(curJob.id, row.k, row.t)" :key="opt" :value="opt">
+                        {{ opt }}
+                      </option>
+                    </select>
+                  </template>
+                  <template v-else>
+                    <Input v-model="row.v" class="min-w-0 flex-[7] text-xs" placeholder="参数值" @input="onRowChange(curJob)" />
+                  </template>
+
+                  <button
+                    type="button"
+                    class="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    :aria-label="`删除参数 ${row.k || idx + 1}`"
+                    @click="removeParamRow(curJob, idx)"
+                  >
+                    <Trash2 class="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+                <label
+                  v-if="row.t !== 'text' && getParamOptions(curJob.id, row.k, row.t).length && (row.t === 'choice' || row.t === 'dynamic')"
+                  class="flex cursor-pointer items-center gap-2 ps-0.5 text-xs text-muted-foreground"
+                >
+                  <input
+                    type="checkbox"
+                    class="size-3.5 shrink-0 rounded border border-input accent-primary"
+                    :checked="row.t === 'dynamic' ? row.dynamicLatest !== false : !!row.choiceLatest"
+                    @change="onLatestAtRunCheckbox(curJob, row, $event)"
+                  />
+                  <span>执行时是否取最新值？</span>
+                </label>
+              </div>
+            </template>
+
             <Button
               variant="ghost"
               class="w-full justify-center border border-dashed border-border/70 text-muted-foreground hover:text-foreground"
               type="button"
-              @click="openParamDraft(curJob)"
+              :disabled="!curJob"
+              @click="openParamAddSheet"
             >
               <Plus class="h-4 w-4" />
               添加参数
             </Button>
-
-            <div v-if="paramDraft[curJob.id]?.open" class="space-y-3 rounded-md bg-background p-3">
-              <div class="space-y-2">
-                <Label class="text-xs">参数名称</Label>
-                <Input
-                  v-model="paramDraft[curJob.id].k"
-                  class="font-mono text-xs"
-                  placeholder="如：branch / REGION / DOCKER_IMAGE"
-                />
-              </div>
-
-              <div class="space-y-2">
-                <Label class="text-xs">类型</Label>
-                <p v-if="!paramDraft[curJob.id].k.trim()" class="text-xs text-muted-foreground">
-                  先填写「参数名称」后再选择类型
-                </p>
-                <div class="grid grid-cols-3 gap-2">
-                  <label
-                    class="flex items-center gap-2 px-1 py-2 text-xs"
-                    :class="!paramDraft[curJob.id].k.trim() ? 'opacity-50' : ''"
-                  >
-                    <input
-                      type="radio"
-                      name="param-type"
-                      value="text"
-                      :disabled="!paramDraft[curJob.id].k.trim()"
-                      :checked="paramDraft[curJob.id]?.t === 'text'"
-                      @change="setParamDraftType(curJob, 'text')"
-                    />
-                    文本
-                  </label>
-                  <label
-                    class="flex items-center gap-2 px-1 py-2 text-xs"
-                    :class="!paramDraft[curJob.id].k.trim() ? 'opacity-50' : ''"
-                  >
-                    <input
-                      type="radio"
-                      name="param-type"
-                      value="choice"
-                      :disabled="!paramDraft[curJob.id].k.trim()"
-                      :checked="paramDraft[curJob.id]?.t === 'choice'"
-                      @change="setParamDraftType(curJob, 'choice')"
-                    />
-                    选项
-                  </label>
-                  <label
-                    class="flex items-center gap-2 px-1 py-2 text-xs"
-                    :class="!paramDraft[curJob.id].k.trim() ? 'opacity-50' : ''"
-                  >
-                    <input
-                      type="radio"
-                      name="param-type"
-                      value="dynamic"
-                      :disabled="!paramDraft[curJob.id].k.trim()"
-                      :checked="paramDraft[curJob.id]?.t === 'dynamic'"
-                      @change="setParamDraftType(curJob, 'dynamic')"
-                    />
-                    动态参数
-                  </label>
-                </div>
-              </div>
-
-              <div class="space-y-2">
-                <Label class="text-xs">参数值</Label>
-                <template v-if="paramDraft[curJob.id].t !== 'text' && paramDraft[curJob.id].options.length">
-                  <select
-                    :class="cn(selectCls, 'w-full text-xs')"
-                    :value="paramDraft[curJob.id].v"
-                    @change="paramDraft[curJob.id].v = ($event.target as HTMLSelectElement).value"
-                  >
-                    <option v-for="opt in paramDraft[curJob.id].options" :key="opt" :value="opt">
-                      {{ opt }}
-                    </option>
-                  </select>
-                </template>
-                <template v-else>
-                  <Input v-model="paramDraft[curJob.id].v" class="text-xs" placeholder="如：master / dev" />
-                </template>
-              </div>
-
-              <div v-if="paramDraft[curJob.id].t === 'dynamic'" class="flex items-center gap-2">
-                <label class="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    :checked="paramDraft[curJob.id].dynamicLatest"
-                    @change="paramDraft[curJob.id].dynamicLatest = ($event.target as HTMLInputElement).checked"
-                  />
-                  执行时获取最新数据
-                </label>
-              </div>
-
-              <div v-if="paramDraft[curJob.id].t !== 'text'" class="flex items-center gap-2">
-                <span v-if="paramDraft[curJob.id].loading" class="text-xs text-muted-foreground">加载中…</span>
-                <span v-else-if="paramDraft[curJob.id].error" class="text-xs text-destructive break-all">{{ paramDraft[curJob.id].error }}</span>
-                <span v-else-if="paramDraft[curJob.id].options.length" class="text-xs text-muted-foreground"
-                  >已加载 {{ paramDraft[curJob.id].options.length }} 项（默认取第一项）</span
-                >
-              </div>
-
-              <div class="flex gap-2">
-                <Button class="flex-1" size="sm" type="button" @click="confirmAddParam(curJob)">添加</Button>
-                <Button class="flex-1" size="sm" variant="outline" type="button" @click="closeParamDraft(curJob)"
-                  >取消</Button
-                >
-              </div>
-            </div>
-
-            <div v-for="(row, idx) in rowCache[curJob.id] || []" :key="idx" class="flex gap-2">
-              <Input v-model="row.k" class="flex-1 font-mono text-xs" placeholder="参数名" @input="onRowChange(curJob)" />
-
-              <template v-if="row.t !== 'text' && getParamOptions(curJob.id, row.k, row.t).length">
-                <select
-                  :class="cn(selectCls, 'flex-1 text-xs')"
-                  :value="row.v"
-                  @change="onParamOptionSelected($event, curJob, row)"
-                >
-                  <option v-for="opt in getParamOptions(curJob.id, row.k, row.t)" :key="opt" :value="opt">
-                    {{ opt }}
-                  </option>
-                </select>
-              </template>
-              <template v-else>
-                <Input v-model="row.v" class="flex-1 text-xs" placeholder="参数值" @input="onRowChange(curJob)" />
-              </template>
-
-              <Button variant="outline" size="icon" class="shrink-0" type="button" @click="removeParamRow(curJob, idx)">
-                <X class="h-4 w-4" />
-              </Button>
-            </div>
           </div>
 
-          <Separator />
+          <template v-if="jobs.length > 1">
+            <Separator />
+
+            <div class="space-y-2">
+              <Label :for="`next-${curJob.id}`">关联 Job</Label>
+              <select
+                :id="`next-${curJob.id}`"
+                :value="curJob.nextJobId ?? ''"
+                :class="selectCls"
+                @change="onNextJobChange($event, curJob)"
+              >
+                <option value="">（不关联）</option>
+                <option v-for="o in otherJobs(curJob.id)" :key="o.id" :value="o.id">
+                  {{ o.name || o.id }}
+                </option>
+              </select>
+            </div>
+          </template>
 
           <div class="space-y-2">
-            <Label :for="`next-${curJob.id}`">关联 Job</Label>
-            <select :id="`next-${curJob.id}`" :value="curJob.nextJobId ?? ''" :class="selectCls" @change="onNextJobChange($event, curJob)">
-              <option value="">（不关联）</option>
-              <option v-for="o in otherJobs(curJob.id)" :key="o.id" :value="o.id">
-                {{ o.name || o.id }}
-              </option>
-            </select>
-          </div>
-
-          <div class="space-y-2">
-            <Label :for="`vu-${curJob.id}`">验证/业务站 URL</Label>
-            <Input :id="`vu-${curJob.id}`" v-model="curJob.verifyUrl" type="url" placeholder="例如：https://xxx.xxx.com/（可选）" />
+            <Label :for="`vu-${curJob.id}`">验证地址</Label>
+            <Input
+              :id="`vu-${curJob.id}`"
+              v-model="curJob.verifyUrl"
+              type="url"
+              placeholder="例如：https://xxx.xxx.com/（可选）"
+              @input="markDirty(curJob.id)"
+            />
           </div>
 
           <p v-if="curJob.lastSuccessParams" class="text-xs text-muted-foreground">
             上次成功：
             <code class="rounded bg-muted px-1 py-0.5">{{ JSON.stringify(curJob.lastSuccessParams) }}</code>
           </p>
-
-          <p v-if="msg[curJob.id]" class="text-xs text-amber-700">{{ msg[curJob.id] }}</p>
         </CardContent>
       </Card>
       <!-- 悬浮操作栏（详情页） -->
@@ -251,13 +212,41 @@
           </Button>
         </div>
       </div>
+
+      <Sheet v-model:open="paramAddSheetOpen">
+        <SheetContent side="bottom" class="max-h-[85vh] overflow-y-auto rounded-t-xl">
+          <SheetHeader>
+            <SheetTitle>添加参数</SheetTitle>
+          </SheetHeader>
+          <div v-if="curJob" class="mt-4 space-y-4">
+            <div class="space-y-2">
+              <Label class="text-xs" :for="`add-pk-${curJob.id}`">参数名称</Label>
+              <Input
+                :id="`add-pk-${curJob.id}`"
+                v-model="manualParam.k"
+                class="font-mono text-xs"
+                placeholder="如：branch"
+              />
+            </div>
+            <div class="space-y-2">
+              <Label class="text-xs" :for="`add-pv-${curJob.id}`">参数值</Label>
+              <Input :id="`add-pv-${curJob.id}`" v-model="manualParam.v" class="text-xs" placeholder="文本值" />
+            </div>
+            <div class="flex gap-2 pt-2">
+              <Button class="flex-1" size="sm" type="button" @click="confirmManualParamAdd(curJob)">添加</Button>
+              <Button class="flex-1" size="sm" variant="outline" type="button" @click="closeParamAddSheet">取消</Button>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
+import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Save, Trash2, X } from 'lucide-vue-next'
+import { ChevronLeft, ExternalLink, Loader2, Play, Plus, Save, SlidersHorizontal, Trash2 } from 'lucide-vue-next'
 import NoJobsCard from '@/components/NoJobsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -265,9 +254,13 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import { fetchBuildWithParamsPageHtml, fetchChoiceParameterChoices } from '@/lib/jenkins'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { parseJenkinsBuildParameterFormHtml } from '@/lib/jenkins-build-form-parse'
+import { fetchBuildWithParamsPageHtml, fetchJenkinsFillUrlOptions } from '@/lib/jenkins'
 import { cn } from '@/lib/utils'
 import { loadJobs, loadSettings, saveJobs } from '@/lib/storage'
+import { pipelineUiBusy, runJobFromUi } from '@/ui/composables/pipelineUiState'
+import { openUrlInNewTab } from '@/ui/composables/runPipeline'
 import { toast } from '@/ui/toast'
 import type { JobConfig, JobParamConfig, JobParamInputType } from '@/types'
 
@@ -291,51 +284,94 @@ const jobs = ref<JobConfig[]>([])
 const mode = ref<'list' | 'detail'>('list')
 const selectedJobId = ref<string | null>(null)
 const curJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? null)
-type ParamRow = { k: string; v: string; t: JobParamInputType; dynamicLatest?: boolean }
+type ParamRow = { k: string; v: string; t: JobParamInputType; dynamicLatest?: boolean; choiceLatest?: boolean }
 const rowCache = reactive<Record<string, ParamRow[]>>({})
 const msg = reactive<Record<string, string>>({})
 const draftMap = reactive<Record<string, boolean>>({})
+/** 为 true 时，Job 名称变更会同步写入别名，直至用户手动编辑过别名 */
+const aliasAutoSync = reactive<Record<string, boolean>>({})
 
 const paramOptionCache = reactive<Record<string, string[]>>({})
-const paramOptionLoading = reactive<Record<string, boolean>>({})
-const paramOptionError = reactive<Record<string, string>>({})
-
-const paramDraft = reactive<
-  Record<
-    string,
-    {
-      open: boolean
-      t: JobParamInputType
-      k: string
-      v: string
-      options: string[]
-      loading: boolean
-      error: string
-      dynamicLatest: boolean
-    }
-  >
->({})
+/** 正在请求 …/build?delay=0sec 并解析参数 */
+const buildParamsLoading = reactive<Record<string, boolean>>({})
+const paramAddSheetOpen = ref(false)
+const manualParam = reactive({ k: '', v: '' })
 
 onMounted(async () => {
   jobs.value = await loadJobs()
-  for (const j of jobs.value) ensureRows(j)
-  for (const j of jobs.value) draftMap[j.id] = false
+  for (const j of jobs.value) {
+    ensureRows(j)
+    draftMap[j.id] = false
+    aliasAutoSync[j.id] = !j.name.trim() || j.name.trim() === j.jobPath.trim()
+  }
 })
 
+async function runOne(j: JobConfig) {
+  await runJobFromUi(j.id)
+  jobs.value = await loadJobs()
+}
+
+function openUrlTab(u: string) {
+  openUrlInNewTab(u)
+}
+
 function goList() {
+  paramAddSheetOpen.value = false
   mode.value = 'list'
   selectedJobId.value = null
 }
 
 function openDetail(id: string) {
+  paramAddSheetOpen.value = false
   const j = jobs.value.find((x) => x.id === id)
-  if (j) ensureRows(j)
+  if (j) {
+    ensureRows(j)
+    aliasAutoSync[j.id] = !j.name.trim() || j.name.trim() === j.jobPath.trim()
+  }
   selectedJobId.value = id
   mode.value = 'detail'
 }
 
 function markDirty(id: string) {
   draftMap[id] = true
+}
+
+function onJobPathInput(j: JobConfig) {
+  markDirty(j.id)
+  if (aliasAutoSync[j.id]) j.name = j.jobPath
+}
+
+function onJobNameInput(j: JobConfig) {
+  aliasAutoSync[j.id] = false
+  markDirty(j.id)
+}
+
+function openParamAddSheet() {
+  manualParam.k = ''
+  manualParam.v = ''
+  paramAddSheetOpen.value = true
+}
+
+function closeParamAddSheet() {
+  paramAddSheetOpen.value = false
+}
+
+function confirmManualParamAdd(j: JobConfig) {
+  const k = manualParam.k.trim()
+  if (!k) {
+    toast({ title: '请填写参数名称', variant: 'error' })
+    return
+  }
+  ensureRows(j)
+  const rows = rowCache[j.id]!
+  const idx = rows.findIndex((r) => r.k.trim() === k)
+  const next: ParamRow = { k, v: manualParam.v ?? '', t: 'text' }
+  if (idx >= 0) rows[idx] = next
+  else rows.push(next)
+  rowsToParams(j)
+  markDirty(j.id)
+  closeParamAddSheet()
+  msg[j.id] = '已添加参数，请点击「保存」写入本机。'
 }
 
 function ensureRows(j: JobConfig) {
@@ -346,7 +382,8 @@ function ensureRows(j: JobConfig) {
       ? entries.map(([k, v]) => {
           const t = (j.paramConfig?.[k]?.type ?? (j.paramAutoFill?.[k] ? 'dynamic' : 'text')) as JobParamInputType
           const dynamicLatest = j.paramConfig?.[k]?.dynamicLatest ?? true
-          return { k, v: String(v), t, dynamicLatest }
+          const choiceLatest = j.paramConfig?.[k]?.choiceLatest === true
+          return { k, v: String(v), t, dynamicLatest, choiceLatest }
         })
       : []
   }
@@ -361,29 +398,126 @@ function rowsToParams(j: JobConfig) {
     const key = r.k.trim()
     if (!key) continue
     p[key] = r.v
-    cfg[key] = { type: r.t, dynamicLatest: r.t === 'dynamic' ? (r.dynamicLatest ?? true) : undefined }
+    cfg[key] = {
+      type: r.t,
+      dynamicLatest: r.t === 'dynamic' ? (r.dynamicLatest ?? true) : undefined,
+      choiceLatest: r.t === 'choice' ? !!r.choiceLatest : undefined,
+    }
 
-    // 动态参数：同步 autoFill 规则（运行时也会自动取最新 option 的 value）
+    // 动态 / choice 勾选「执行时取最新」：运行时从参数页抓取该下拉首项覆盖提交值
     if (r.t === 'dynamic') {
       if (cfg[key].dynamicLatest !== false) ensureDynamicAutoRule(j, key)
       else if (j.paramAutoFill[key]) delete j.paramAutoFill[key]
-    } else {
-      // 非动态：移除残留规则，避免意外覆盖
-      if (j.paramAutoFill[key]) delete j.paramAutoFill[key]
+    } else if (r.t === 'choice' && r.choiceLatest) {
+      ensureDynamicAutoRule(j, key)
+    } else if (j.paramAutoFill[key]) {
+      delete j.paramAutoFill[key]
     }
   }
   j.displayParams = p
   j.paramConfig = cfg
-  markDirty(j.id)
 }
 
 function onRowChange(j: JobConfig) {
   rowsToParams(j)
+  markDirty(j.id)
 }
 
 function optionKey(jobId: string, paramKey: string, t: JobParamInputType) {
   return `${jobId}:${t}:${paramKey}`
 }
+
+/** 从 Jenkins 参数页（…/job/…/build?delay=0sec）解析并填充构建参数行 */
+async function syncBuildParamsFromHtml(j: JobConfig) {
+  const settings = await loadSettings()
+  if (!settings.jenkinsUrl?.trim() || !settings.jenkinsUser || !settings.jenkinsToken) {
+    msg[j.id] = '请先完成 Jenkins 连接配置（地址、用户、Token），才能同步构建参数。'
+    return
+  }
+  if (!j.jobPath?.trim()) return
+
+  buildParamsLoading[j.id] = true
+  try {
+    const html = await fetchBuildWithParamsPageHtml(
+      settings.jenkinsUrl,
+      settings.jenkinsUser,
+      settings.jenkinsToken,
+      j.jobPath,
+      undefined,
+    )
+    const parsed = parseJenkinsBuildParameterFormHtml(html)
+    if (!parsed.length) {
+      msg[j.id] = '未解析到参数：请确认该 Job 为参数化构建，且当前账号可访问参数页。'
+      rowCache[j.id] = []
+      rowsToParams(j)
+      markDirty(j.id)
+      return
+    }
+
+    const fillUrlErrors: string[] = []
+    for (const p of parsed) {
+      const fu = p.fillUrl?.trim()
+      if (!fu) continue
+      try {
+        const opts = await fetchJenkinsFillUrlOptions(
+          settings.jenkinsUrl,
+          settings.jenkinsUser,
+          settings.jenkinsToken,
+          fu,
+        )
+        if (opts.length) {
+          p.options = opts
+          p.value = opts.includes(p.value) ? p.value : (opts[0] ?? '')
+        }
+      } catch (e) {
+        fillUrlErrors.push(`${p.key}: ${(e as Error).message}`)
+      }
+    }
+
+    rowCache[j.id] = parsed.map((p) => ({
+      k: p.key,
+      v: p.value,
+      t: p.type,
+      dynamicLatest: p.type === 'dynamic' ? true : undefined,
+      choiceLatest: p.type === 'choice' ? false : undefined,
+    }))
+
+    for (const p of parsed) {
+      if (p.options.length) {
+        paramOptionCache[optionKey(j.id, p.key, p.type)] = [...p.options]
+      }
+    }
+
+    rowsToParams(j)
+    markDirty(j.id)
+    msg[j.id] =
+      fillUrlErrors.length > 0
+        ? `已从 Jenkins 同步 ${parsed.length} 个构建参数。fillUrl 部分失败：${fillUrlErrors.join('；')}`
+        : `已从 Jenkins 同步 ${parsed.length} 个构建参数。`
+  } catch (e) {
+    msg[j.id] = (e as Error).message
+  } finally {
+    buildParamsLoading[j.id] = false
+  }
+}
+
+watchDebounced(
+  () => {
+    if (mode.value !== 'detail') return ''
+    const j = curJob.value
+    const p = j?.jobPath?.trim()
+    if (!j || !p) return ''
+    return `${j.id}::${p}`
+  },
+  async (key) => {
+    if (!key) return
+    if (mode.value !== 'detail') return
+    const j = curJob.value
+    if (!j) return
+    await syncBuildParamsFromHtml(j)
+  },
+  { debounce: 650, maxWait: 4000 },
+)
 
 function defaultSelectorForParam(paramKey: string) {
   const safe = paramKey.replaceAll('"', '\\"')
@@ -413,207 +547,27 @@ function getParamOptions(jobId: string, paramKey: string, t: JobParamInputType):
 function onParamOptionSelected(ev: Event, j: JobConfig, row: ParamRow) {
   row.v = (ev.target as HTMLSelectElement).value
   rowsToParams(j)
+  markDirty(j.id)
 }
 
-async function loadParamOptions(j: JobConfig, row: ParamRow) {
-  const paramKey = row.k?.trim()
-  if (!paramKey) return
-  if (row.t === 'text') return
-  const k = optionKey(j.id, paramKey, row.t)
-
-  paramOptionError[k] = ''
-  paramOptionLoading[k] = true
-  try {
-    const settings = await loadSettings()
-    if (!settings.jenkinsUrl || !settings.jenkinsUser || !settings.jenkinsToken) {
-      throw new Error('请先在「基础配置」中填写 Jenkins 地址、用户与 API Token')
-    }
-    if (!j.jobPath?.trim()) throw new Error('请先填写 Jenkins Job 名称')
-
-    let opts: string[] = []
-    if (row.t === 'choice') {
-      opts = await fetchChoiceParameterChoices(
-        settings.jenkinsUrl,
-        settings.jenkinsUser,
-        settings.jenkinsToken,
-        j.jobPath,
-        paramKey
-      )
-    } else if (row.t === 'dynamic') {
-      const rule = ensureDynamicAutoRule(j, paramKey)
-      const html = await fetchBuildWithParamsPageHtml(
-        settings.jenkinsUrl,
-        settings.jenkinsUser,
-        settings.jenkinsToken,
-        j.jobPath,
-        undefined
-      )
-      const doc = new DOMParser().parseFromString(html, 'text/html')
-      const input = doc.querySelector(`input[value="${paramKey.replaceAll('"', '\\"')}"]`) as HTMLInputElement | null
-      const container =
-        (input?.closest?.('div[name="parameter"]') as HTMLElement | null) ??
-        (input?.parentElement as HTMLElement | null)
-
-      const select = (container?.querySelector?.('select') as HTMLSelectElement | null) ?? null
-
-      if (select) {
-        opts = Array.from(select.options)
-          .map((o) => String(o.value || '').trim())
-          .filter(Boolean)
-      } else {
-        // 兜底：使用 selector 查询
-        const nodes = Array.from(doc.querySelectorAll(rule.selector))
-        if (!nodes.length) {
-          throw new Error(`未找到 parent/容器 select，且 selector 未匹配：${rule.selector}`)
-        }
-        const picked = nodes[0]
-        const sel =
-          picked instanceof HTMLSelectElement
-            ? picked
-            : (picked instanceof HTMLElement ? picked.querySelector('select') : null)
-        if (!sel) throw new Error('未找到 select 元素')
-        opts = Array.from(sel.options)
-          .map((o) => String(o.value || '').trim())
-          .filter(Boolean)
-      }
-    }
-
-    if (!opts.length) throw new Error('下拉 option 为空')
-    paramOptionCache[k] = opts
-
-    // 默认取第一个，并同步到参数值
-    row.v = opts[0]
-    rowsToParams(j)
-    msg[j.id] = '已加载下拉选项（默认取第一项）。如需持久化规则，请点击「保存」。'
-  } catch (e) {
-    paramOptionError[k] = (e as Error).message
-  } finally {
-    paramOptionLoading[k] = false
-  }
-}
-
-function ensureDraft(jobId: string) {
-  if (!paramDraft[jobId]) {
-    paramDraft[jobId] = { open: false, t: 'text', k: '', v: '', options: [], loading: false, error: '', dynamicLatest: true }
-  }
-  return paramDraft[jobId]
-}
-
-function openParamDraft(j: JobConfig) {
-  const d = ensureDraft(j.id)
-  d.open = true
-  d.t = 'text'
-  d.k = ''
-  d.v = ''
-  d.options = []
-  d.loading = false
-  d.error = ''
-  d.dynamicLatest = true
-}
-
-function closeParamDraft(j: JobConfig) {
-  const d = ensureDraft(j.id)
-  d.open = false
-}
-
-function setParamDraftType(j: JobConfig, t: JobParamInputType) {
-  const d = ensureDraft(j.id)
-  d.t = t
-  d.options = []
-  d.v = ''
-  d.error = ''
-  if (t === 'dynamic') d.dynamicLatest = true
-  if (t !== 'text') {
-    // 切到「选项/动态参数」时自动加载（基于已填写的参数名）
-    void loadDraftOptions(j)
-  }
-}
-
-async function loadDraftOptions(j: JobConfig) {
-  const d = ensureDraft(j.id)
-  const paramKey = d.k.trim()
-  if (!paramKey) {
-    d.error = '请先填写参数名称'
-    return
-  }
-  if (d.t === 'text') return
-
-  d.error = ''
-  d.loading = true
-  try {
-    const settings = await loadSettings()
-    if (!settings.jenkinsUrl || !settings.jenkinsUser || !settings.jenkinsToken) {
-      throw new Error('请先在「基础配置」中填写 Jenkins 地址、用户与 API Token')
-    }
-    if (!j.jobPath?.trim()) throw new Error('请先填写 Jenkins Job 名称')
-
-    let opts: string[] = []
-    if (d.t === 'choice') {
-      opts = await fetchChoiceParameterChoices(
-        settings.jenkinsUrl,
-        settings.jenkinsUser,
-        settings.jenkinsToken,
-        j.jobPath,
-        paramKey
-      )
-    } else if (d.t === 'dynamic') {
-      const html = await fetchBuildWithParamsPageHtml(
-        settings.jenkinsUrl,
-        settings.jenkinsUser,
-        settings.jenkinsToken,
-        j.jobPath,
-        undefined
-      )
-      const doc = new DOMParser().parseFromString(html, 'text/html')
-      const input = doc.querySelector(`input[value="${paramKey.replaceAll('"', '\\"')}"]`) as HTMLInputElement | null
-      const container =
-        (input?.closest?.('div[name="parameter"]') as HTMLElement | null) ??
-        (input?.parentElement as HTMLElement | null)
-      const select = (container?.querySelector?.('select') as HTMLSelectElement | null) ?? null
-
-      if (!select) throw new Error('未找到 parent/容器 select')
-      opts = Array.from(select.options).map((o) => String(o.value || '').trim()).filter(Boolean)
-    }
-
-    if (!opts.length) throw new Error('下拉 option 为空')
-    d.options = opts
-    d.v = opts[0]
-  } catch (e) {
-    d.error = (e as Error).message
-  } finally {
-    d.loading = false
-  }
-}
-
-function confirmAddParam(j: JobConfig) {
-  const d = ensureDraft(j.id)
-  const k = d.k.trim()
-  if (!k) {
-    d.error = '请填写参数名称'
-    return
-  }
-  // 若同名已存在：覆盖其配置/值
-  ensureRows(j)
-  const rows = rowCache[j.id]!
-  const idx = rows.findIndex((r) => r.k.trim() === k)
-  const next: ParamRow = { k, v: d.v ?? '', t: d.t, dynamicLatest: d.t === 'dynamic' ? d.dynamicLatest : undefined }
-  if (idx >= 0) rows[idx] = next
-  else rows.push(next)
-
-  // 同步类型配置与动态规则
+function onLatestAtRunCheckbox(j: JobConfig, row: ParamRow, ev: Event) {
+  const checked = (ev.target as HTMLInputElement).checked
+  if (row.t === 'dynamic') row.dynamicLatest = checked
+  else if (row.t === 'choice') row.choiceLatest = checked
   rowsToParams(j)
-  d.open = false
-  msg[j.id] = '已添加参数，请点击「保存」写入本机。'
+  markDirty(j.id)
 }
 
 function onNextJobChange(ev: Event, j: JobConfig) {
   const v = (ev.target as HTMLSelectElement).value
   j.nextJobId = v ? v : null
+  markDirty(j.id)
 }
 
 function addParamRow(j: JobConfig) {
   ensureRows(j)
   rowCache[j.id]!.push({ k: '', v: '', t: 'text' })
+  markDirty(j.id)
 }
 
 function removeParamRow(j: JobConfig, idx: number) {
@@ -621,6 +575,7 @@ function removeParamRow(j: JobConfig, idx: number) {
   const rows = rowCache[j.id]!
   rows.splice(idx, 1)
   rowsToParams(j)
+  markDirty(j.id)
 }
 
 function addJobAndOpen() {
@@ -628,6 +583,7 @@ function addJobAndOpen() {
   jobs.value = [...jobs.value, n]
   ensureRows(n)
   draftMap[n.id] = true
+  aliasAutoSync[n.id] = true
   msg[n.id] = '已添加草稿，请点击「保存」写入本机。'
   openDetail(n.id)
 }
@@ -641,6 +597,7 @@ function remove(id: string) {
   jobs.value = jobs.value.filter((j) => j.id !== id)
   delete rowCache[id]
   delete draftMap[id]
+  delete aliasAutoSync[id]
   if (selectedJobId.value === id) goList()
   void persist()
 }
