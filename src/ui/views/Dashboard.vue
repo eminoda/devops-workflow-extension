@@ -72,8 +72,9 @@ async function loadHist() {
   history.value = await loadHistory()
 }
 
+/** 仅当本地记录尚未写入结束时间且尚无 Jenkins 结果时视为执行中（避免 endTime 丢失但 result 已存在时误显示「执行中」） */
 function isRunningRow(h: RunRecord) {
-  return h.endTime == null
+  return h.endTime == null && h.result == null
 }
 
 function formatTime(t: number) {

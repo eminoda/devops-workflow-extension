@@ -12,31 +12,44 @@
       <NoJobsCard v-if="!jobs.length" @add="addJobAndOpen" />
 
       <div v-else class="space-y-3">
-        <Card v-for="j in jobs" :key="j.id" class="border-0 shadow-none">
+        <Card
+          v-for="item in jobsListDisplay"
+          :key="item.job.id"
+          class="border-0 shadow-none"
+          :style="item.depth > 0 ? { marginLeft: `${12 + (item.depth - 1) * 16}px` } : undefined"
+        >
           <CardContent class="flex items-center gap-2 py-4">
-            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="openDetail(j.id)">
+            <div
+              class="flex h-9 w-5 shrink-0 items-center justify-center text-muted-foreground"
+              :title="item.depth > 0 ? '关联链中的后续 Job' : 'Job 链起点'"
+              aria-hidden="true"
+            >
+              <Folder v-if="item.depth === 0" class="h-4 w-4" />
+              <CornerDownRight v-else class="h-4 w-4" />
+            </div>
+            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="openDetail(item.job.id)">
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
-                  <div class="truncate text-sm font-medium">{{ j.name || '新 Job' }}</div>
-                  <Badge v-if="draftMap[j.id]" variant="secondary" class="shrink-0">草稿</Badge>
+                  <div class="truncate text-sm font-medium">{{ item.job.name || '新 Job' }}</div>
+                  <Badge v-if="draftMap[item.job.id]" variant="secondary" class="shrink-0">草稿</Badge>
                 </div>
-                <div class="truncate font-mono text-xs text-muted-foreground">Job：{{ j.jobPath || '（未填写）' }}</div>
+                <div class="truncate font-mono text-xs text-muted-foreground">Job：{{ item.job.jobPath || '（未填写）' }}</div>
               </div>
             </button>
             <div class="flex shrink-0 items-center gap-1" @click.stop>
-              <Button type="button" size="icon" variant="outline" title="详情" @click="openDetail(j.id)">
+              <Button type="button" size="icon" variant="outline" title="详情" @click="openDetail(item.job.id)">
                 <SlidersHorizontal class="h-4 w-4" />
               </Button>
-              <Button type="button" size="icon" :disabled="pipelineUiBusy" title="运行" @click="runOne(j)">
+              <Button type="button" size="icon" :disabled="pipelineUiBusy" title="运行" @click="runOne(item.job)">
                 <Play class="h-4 w-4" />
               </Button>
               <Button
-                v-if="j.verifyUrl"
+                v-if="item.job.verifyUrl"
                 type="button"
                 size="icon"
                 variant="outline"
                 title="验证地址"
-                @click="openUrlTab(j.verifyUrl!)"
+                @click="openUrlTab(item.job.verifyUrl!)"
               >
                 <ExternalLink class="h-4 w-4" />
               </Button>
@@ -245,8 +258,20 @@
 
 <script setup lang="ts">
 import { watchDebounced } from '@vueuse/core'
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ChevronLeft, ExternalLink, Loader2, Play, Plus, Save, SlidersHorizontal, Trash2 } from 'lucide-vue-next'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import {
+  ChevronLeft,
+  CornerDownRight,
+  ExternalLink,
+  Folder,
+  Loader2,
+  Play,
+  Plus,
+  Save,
+  SlidersHorizontal,
+  Trash2,
+} from 'lucide-vue-next'
 import NoJobsCard from '@/components/NoJobsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -258,11 +283,13 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { parseJenkinsBuildParameterFormHtml } from '@/lib/jenkins-build-form-parse'
 import { fetchBuildWithParamsPageHtml, fetchJenkinsFillUrlOptions } from '@/lib/jenkins'
 import { cn } from '@/lib/utils'
-import { loadJobs, loadSettings, saveJobs } from '@/lib/storage'
+import { loadJobs, loadSettings, saveJobs, STORAGE_RELOAD_EVENT } from '@/lib/storage'
 import { pipelineUiBusy, runJobFromUi } from '@/ui/composables/pipelineUiState'
 import { openUrlInNewTab } from '@/ui/composables/runPipeline'
 import { toast } from '@/ui/toast'
 import type { JobConfig, JobParamConfig, JobParamInputType } from '@/types'
+
+const router = useRouter()
 
 const selectCls = cn(
   'flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
@@ -281,6 +308,45 @@ function newJob(): JobConfig {
 }
 
 const jobs = ref<JobConfig[]>([])
+/** 列表展示：按 nextJobId 链缩进，子 Job 左侧虚线 + 缩进 */
+type JobListRow = { job: JobConfig; depth: number }
+const jobsListDisplay = computed<JobListRow[]>(() => {
+  const list = jobs.value
+  if (!list.length) return []
+  const byId = new Map(list.map((j) => [j.id, j]))
+  const incoming = new Set(
+    list.map((j) => j.nextJobId).filter((id): id is string => typeof id === 'string' && !!id.trim()),
+  )
+  const indexById = new Map(list.map((j, i) => [j.id, i]))
+  const roots = list
+    .filter((j) => !incoming.has(j.id))
+    .sort((a, b) => (indexById.get(a.id)! - indexById.get(b.id)!))
+
+  const rows: JobListRow[] = []
+  const seen = new Set<string>()
+  for (const root of roots) {
+    let depth = 0
+    let cur: JobConfig | undefined = root
+    const chainSeen = new Set<string>()
+    while (cur && !chainSeen.has(cur.id)) {
+      if (seen.has(cur.id)) break
+      chainSeen.add(cur.id)
+      seen.add(cur.id)
+      rows.push({ job: cur, depth })
+      depth++
+      const nextId = (cur.nextJobId ?? '').trim()
+      cur = nextId ? byId.get(nextId) : undefined
+    }
+  }
+  for (const j of list) {
+    if (!seen.has(j.id)) {
+      seen.add(j.id)
+      rows.push({ job: j, depth: 0 })
+    }
+  }
+  return rows
+})
+
 const mode = ref<'list' | 'detail'>('list')
 const selectedJobId = ref<string | null>(null)
 const curJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? null)
@@ -297,18 +363,39 @@ const buildParamsLoading = reactive<Record<string, boolean>>({})
 const paramAddSheetOpen = ref(false)
 const manualParam = reactive({ k: '', v: '' })
 
-onMounted(async () => {
+async function bootstrapJobsFromStorage() {
   jobs.value = await loadJobs()
+  for (const k of Object.keys(rowCache)) delete rowCache[k]
+  for (const k of Object.keys(paramOptionCache)) delete paramOptionCache[k]
+  for (const k of Object.keys(buildParamsLoading)) delete buildParamsLoading[k]
+  for (const k of Object.keys(msg)) delete msg[k]
+  for (const k of Object.keys(draftMap)) delete draftMap[k]
+  for (const k of Object.keys(aliasAutoSync)) delete aliasAutoSync[k]
   for (const j of jobs.value) {
     ensureRows(j)
     draftMap[j.id] = false
     aliasAutoSync[j.id] = !j.name.trim() || j.name.trim() === j.jobPath.trim()
   }
+  if (selectedJobId.value && !jobs.value.some((j) => j.id === selectedJobId.value)) goList()
+}
+
+function onStorageReloadFromImport() {
+  void bootstrapJobsFromStorage()
+}
+
+onMounted(async () => {
+  await bootstrapJobsFromStorage()
+  window.addEventListener(STORAGE_RELOAD_EVENT, onStorageReloadFromImport)
+})
+
+onUnmounted(() => {
+  window.removeEventListener(STORAGE_RELOAD_EVENT, onStorageReloadFromImport)
 })
 
 async function runOne(j: JobConfig) {
   await runJobFromUi(j.id)
   jobs.value = await loadJobs()
+  void router.push('/')
 }
 
 function openUrlTab(u: string) {
@@ -474,17 +561,38 @@ async function syncBuildParamsFromHtml(j: JobConfig) {
       }
     }
 
-    rowCache[j.id] = parsed.map((p) => ({
-      k: p.key,
-      v: p.value,
-      t: p.type,
-      dynamicLatest: p.type === 'dynamic' ? true : undefined,
-      choiceLatest: p.type === 'choice' ? false : undefined,
-    }))
+    const prevByKey = new Map<string, ParamRow>()
+    for (const r of rowCache[j.id] || []) {
+      const key = r.k.trim()
+      if (key) prevByKey.set(key, { ...r })
+    }
 
-    for (const p of parsed) {
+    rowCache[j.id] = parsed.map((p) => {
+      const key = p.key.trim()
+      const prev = prevByKey.get(key)
+      if (prev) {
+        return {
+          k: p.key,
+          v: prev.v,
+          t: prev.t,
+          dynamicLatest: prev.dynamicLatest,
+          choiceLatest: prev.choiceLatest,
+        }
+      }
+      return {
+        k: p.key,
+        v: p.value,
+        t: p.type,
+        dynamicLatest: p.type === 'dynamic' ? true : undefined,
+        choiceLatest: p.type === 'choice' ? false : undefined,
+      }
+    })
+
+    for (let i = 0; i < parsed.length; i++) {
+      const p = parsed[i]
+      const row = rowCache[j.id]![i]
       if (p.options.length) {
-        paramOptionCache[optionKey(j.id, p.key, p.type)] = [...p.options]
+        paramOptionCache[optionKey(j.id, p.key, row.t)] = [...p.options]
       }
     }
 

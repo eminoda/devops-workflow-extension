@@ -53,6 +53,9 @@
     </div>
     <div class="space-y-2">
       <Button class="w-full" type="submit" :disabled="saving">保存</Button>
+      <p class="text-center text-[11px] leading-snug text-muted-foreground">
+        所有配置&记录均在本地，不会上传至服务端
+      </p>
       <div class="flex flex-col gap-1">
         <span v-if="savedAt" class="text-xs text-muted-foreground">已保存（{{ savedAt }}）</span>
         <span v-if="err" class="text-xs text-destructive">{{ err }}</span>
@@ -63,13 +66,13 @@
 
 <script setup lang="ts">
 import { ExternalLink } from 'lucide-vue-next'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { joinUrl } from '@/lib/jenkins-utils'
-import { loadSettings, saveSettings } from '@/lib/storage'
+import { loadSettings, saveSettings, STORAGE_RELOAD_EVENT } from '@/lib/storage'
 import type { JenkinsSettings } from '@/types'
 import { defaultSettings } from '@/types'
 
@@ -89,8 +92,21 @@ const saving = ref(false)
 const savedAt = ref('')
 const err = ref('')
 
-onMounted(async () => {
+async function hydrateFormFromStorage() {
   Object.assign(form, await loadSettings())
+}
+
+function onStorageReloadFromImport() {
+  void hydrateFormFromStorage()
+}
+
+onMounted(async () => {
+  await hydrateFormFromStorage()
+  window.addEventListener(STORAGE_RELOAD_EVENT, onStorageReloadFromImport)
+})
+
+onUnmounted(() => {
+  window.removeEventListener(STORAGE_RELOAD_EVENT, onStorageReloadFromImport)
 })
 
 async function save() {
