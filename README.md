@@ -13,25 +13,29 @@
 
 ## 图片展示（`docs/`）
 
-### 1）执行 Jenkins 的截图
+### 1）在 Jenkins 中创建 API Token（如何获取 Token）
 
-![执行 Jenkins](docs/1.png)
+在 Jenkins 网页右上角点击你的 **用户名** → **Configure（配置）**，在 **API Token** 区域点击 **Add new Token**，生成后复制保存；扩展「基础配置」里填写的 **用户** 与 **API Token** 须与此一致。勿将 Token 提交到仓库或发给他人。
 
-### 2）Jenkins Job 配置截图
+![创建 Jenkins Token](docs/创建%20Jenkins%20Token.png)
 
-![Jenkins Job 配置](docs/2.png)
+### 2）Jenkins 主面板（运行监控）
 
-### 3）和 Jenkins CI 对比截图
+打开 Jenkins 后，把 **浏览器地址栏里显示的站点根地址**（例如 `https://jenkins.example.com/` 或带上下文的 `https://ci.company.com/jenkins/`）记下来，填入扩展「基础配置」中的 **Jenkins 地址**，需与你在浏览器里访问 Jenkins 的 URL 一致（协议、域名、端口、路径前缀都要对上）。
 
-![与 Jenkins CI 对比](docs/3.png)
+![Jenkins 主面板](docs/Jenkins%20主面板.png)
 
-### 4）和 Jenkins CD 对比截图
+### 3）新增 Job
 
-![与 Jenkins CD 对比](docs/4.png)
+![新增 Job](docs/新增Job.png)
 
-### 5）企微效果图
+### 4）管理 Job
 
-![企微效果图](docs/5.png)
+![管理 Job](docs/管理Job.png)
+
+### 5）运行 Job
+
+![运行 Job](docs/运行Job.png)
 
 ## 本地开发与加载扩展
 
