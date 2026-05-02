@@ -393,9 +393,9 @@ onUnmounted(() => {
 })
 
 async function runOne(j: JobConfig) {
+  void router.push('/')
   await runJobFromUi(j.id)
   jobs.value = await loadJobs()
-  void router.push('/')
 }
 
 function openUrlTab(u: string) {

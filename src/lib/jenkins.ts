@@ -70,6 +70,41 @@ export async function fetchCrumb(
 }
 
 /**
+ * POST `{buildUrl}/stop`，终止该次构建（需 Basic；若 Jenkins 启用 CSRF 则自动带 crumb）。
+ * buildUrl 一般为 `https://…/job/…/N/` 形式。
+ */
+export async function stopJenkinsBuild(
+  jenkinsBase: string,
+  user: string,
+  token: string,
+  buildUrl: string,
+): Promise<void> {
+  const base = trimJenkinsBase(jenkinsBase)
+  const stopUrl = `${buildUrl.replace(/\/?$/, '')}/stop`
+  const auth = basicAuthHeader(user, token)
+  const post = async (crumbH: Crumb | null) => {
+    const headers: Record<string, string> = {
+      Authorization: auth,
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    }
+    if (crumbH) headers[crumbH.crumbRequestField] = crumbH.crumb
+    return fetch(stopUrl, { method: 'POST', headers, body: '' })
+  }
+  let r = await post(null)
+  if (r.status === 403) {
+    const t = await r.text().catch(() => '')
+    if (/no valid crumb|valid crumb|csrf|crumb/i.test(t) || t.length < 1) {
+      const c = await fetchCrumb(base, user, token)
+      if (c) r = await post(c)
+    }
+  }
+  if (!r.ok && r.status !== 302) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`停止构建失败: ${r.status} ${(t || '').slice(0, 400)}`)
+  }
+}
+
+/**
  * 触发参数化构建，返回 queue item 的 `.../queue/item/xxx/api/json` URL
  */
 export async function triggerParameterizedBuild(

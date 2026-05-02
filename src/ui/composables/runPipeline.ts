@@ -11,15 +11,25 @@ import type { BuildResult, JobConfig, JenkinsSettings, JobParamAutoFillRule, Run
 
 export type RunLogHandler = (line: string) => void
 
+/** Jenkins WorkflowRun.result 大小写不一，统一后再判断 SUCCESS / 链式触发 */
+function normalizedJenkinsBuildResult(raw: string | null | undefined): BuildResult {
+  if (raw == null || String(raw).trim() === '') return null
+  const u = String(raw).trim().toUpperCase()
+  if (u === 'SUCCESS' || u === 'FAILURE' || u === 'ABORTED' || u === 'UNSTABLE') return u
+  return null
+}
+
+export type BuildAllocatedHandler = (info: { buildUrl: string; buildNumber: number | null }) => void
+
 function webhookForJob(settings: JenkinsSettings): string {
   return (settings.wecomWebhookGlobal || '').trim()
 }
 
 export async function runJobAndMaybeChain(
   startJobId: string,
-  opts: { onLog?: RunLogHandler; chainDepth?: number } = {}
+  opts: { onLog?: RunLogHandler; chainDepth?: number; onBuildAllocated?: BuildAllocatedHandler } = {},
 ): Promise<void> {
-  const { onLog, chainDepth = 0 } = opts
+  const { onLog, chainDepth = 0, onBuildAllocated } = opts
   const log = (s: string) => onLog?.(s)
 
   const settings = await loadSettings()
@@ -90,9 +100,10 @@ export async function runJobAndMaybeChain(
     finalBuildUrl = q.buildUrl
     finalBuildNumber = q.buildNumber
     await updateRun(runId, { buildUrl: finalBuildUrl, buildNumber: finalBuildNumber })
+    if (finalBuildUrl) onBuildAllocated?.({ buildUrl: finalBuildUrl, buildNumber: finalBuildNumber })
     log?.(`已分配 #${finalBuildNumber}，等待结束…`)
     const b = await pollBuildFinished(q.buildUrl, settings.jenkinsUser, settings.jenkinsToken)
-    result = (b.result as BuildResult) || null
+    result = normalizedJenkinsBuildResult(b.result)
     if (result === 'SUCCESS') {
       const list = await loadJobs()
       const idx = list.findIndex((j) => j.id === job.id)
@@ -143,14 +154,21 @@ export async function runJobAndMaybeChain(
     }
   }
 
-  if (!errMsg && result === 'SUCCESS' && job.nextJobId) {
+  if (!errMsg && result === 'SUCCESS') {
     const all = await loadJobs()
-    const next = all.find((j) => j.id === job.nextJobId)
-    if (next) {
-      log?.(`成功，链式触发: ${next.name}`)
-      log?.('等待 3 秒后继续…')
-      await new Promise<void>((resolve) => setTimeout(resolve, 3000))
-      await runJobAndMaybeChain(next.id, { onLog, chainDepth: chainDepth + 1 })
+    const jobLatest = all.find((j) => j.id === job.id) ?? job
+    const nextId =
+      typeof jobLatest.nextJobId === 'string' && jobLatest.nextJobId.trim() ? jobLatest.nextJobId.trim() : ''
+    if (nextId) {
+      const next = all.find((j) => j.id === nextId)
+      if (next) {
+        log?.(`成功，链式触发: ${next.name}`)
+        log?.('等待 3 秒后继续…')
+        await new Promise<void>((resolve) => setTimeout(resolve, 3000))
+        await runJobAndMaybeChain(next.id, { onLog, chainDepth: chainDepth + 1, onBuildAllocated })
+      } else {
+        log?.(`未找到关联 Job（nextJobId=${nextId}），请确认 Jobs 列表中仍存在该任务并已保存。`)
+      }
     }
   }
 }

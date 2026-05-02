@@ -1,5 +1,50 @@
-import type { JobConfig, JenkinsSettings, RunRecord } from '@/types'
+import { fetchBuildJson } from '@/lib/jenkins'
+import type { BuildResult, JobConfig, JenkinsSettings, RunRecord } from '@/types'
 import { defaultSettings } from '@/types'
+
+function normalizeJenkinsResultLabel(raw: string | null | undefined): BuildResult {
+  if (raw == null || String(raw).trim() === '') return null
+  const u = String(raw).trim().toUpperCase()
+  if (u === 'SUCCESS' || u === 'FAILURE' || u === 'ABORTED' || u === 'UNSTABLE') return u
+  return null
+}
+
+/**
+ * 对仍有 buildUrl 但本地未写入结束态的记录，向 Jenkins 拉一次 api/json；若已结束则补全 endTime/result/buildNumber。
+ * 用于修复弹窗关闭、updateRun 未命中等导致的「一直执行中」与 curl 实际结果不一致。
+ */
+export async function reconcileStaleRunRecords(settings: JenkinsSettings): Promise<boolean> {
+  if (!settings.jenkinsUrl?.trim() || !settings.jenkinsUser || !settings.jenkinsToken) return false
+
+  const list = await loadHistory()
+  const { jenkinsUser: user, jenkinsToken: token } = settings
+
+  let changed = false
+  const merged = await Promise.all(
+    list.map(async (r) => {
+      if (r.endTime != null || r.result != null || !r.buildUrl?.trim()) return r
+      try {
+        const b = await fetchBuildJson(r.buildUrl!, user, token)
+        const result = normalizeJenkinsResultLabel(b.result)
+        if (!b.building && result) {
+          changed = true
+          return {
+            ...r,
+            endTime: Date.now(),
+            result,
+            buildNumber: typeof b.number === 'number' ? b.number : r.buildNumber,
+          }
+        }
+      } catch {
+        /* 网络/鉴权失败等，跳过 */
+      }
+      return r
+    }),
+  )
+
+  if (changed) await saveHistory(merged)
+  return changed
+}
 
 /** 导入/恢复存储后广播，供各视图刷新内存态 */
 export const STORAGE_RELOAD_EVENT = 'jenkins-runner-reload-storage'
@@ -133,9 +178,15 @@ export async function saveHistory(list: RunRecord[]): Promise<void> {
   await chrome.storage.local.set({ [K_HISTORY]: trimmed })
 }
 
+export async function clearRunHistory(): Promise<void> {
+  await saveHistory([])
+}
+
+/** 同一 Job 再次执行时，先移除该 jobId 的旧记录，仅保留本次新插入的一条（避免历史列表堆叠同一任务） */
 export async function appendRun(item: RunRecord): Promise<void> {
   const cur = await loadHistory()
-  await saveHistory([item, ...cur])
+  const rest = cur.filter((r) => r.jobId !== item.jobId)
+  await saveHistory([item, ...rest])
 }
 
 export async function updateRun(
