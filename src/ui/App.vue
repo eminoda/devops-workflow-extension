@@ -2,7 +2,16 @@
   <div class="h-full min-h-0 w-full overflow-hidden rounded-[12px] bg-background text-foreground flex flex-col">
     <header class="px-2.5 pt-2">
       <div class="flex items-center justify-between gap-2">
-        <div class="text-sm font-semibold tracking-tight">Jenkins Runner</div>
+        <div class="flex min-w-0 items-center gap-2">
+          <img
+            :src="logo128"
+            alt=""
+            class="h-7 w-7 shrink-0 rounded-md object-contain"
+            width="28"
+            height="28"
+          />
+          <div class="text-sm font-semibold tracking-tight truncate">Jenkins Runner</div>
+        </div>
         <div class="flex shrink-0 items-center gap-0.5">
           <input
             ref="importFileRef"
@@ -61,6 +70,7 @@
 </template>
 
 <script setup lang="ts">
+import logo128 from '@/assets/icons/icon-128.png'
 import { FileJson, FolderInput, Settings } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jenkins Runner — Chrome 网上应用店截图页</title>
+    <style>
+      :root {
+        --bg-page: #f8fafc;
+        --bg-card: #ffffff;
+        --text: #0f172a;
+        --muted: #64748b;
+        --border: #e2e8f0;
+        --img-border: #cbd5e1;
+        --frame-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.06),
+          0 12px 32px -8px rgba(15, 23, 42, 0.1);
+        --img-shadow: 0 12px 40px rgba(15, 23, 42, 0.12),
+          0 4px 12px rgba(15, 23, 42, 0.06),
+          0 0 0 1px rgba(15, 23, 42, 0.04);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", system-ui, -apple-system, "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        background: var(--bg-page);
+        color: var(--text);
+        padding: 40px 24px 72px;
+      }
+
+      .page-intro {
+        max-width: 1280px;
+        margin: 0 auto 36px;
+        text-align: center;
+      }
+
+      .page-intro h1 {
+        margin: 0 0 10px;
+        font-size: 1.65rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        color: var(--text);
+      }
+
+      .page-intro .lead {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.95rem;
+        line-height: 1.65;
+        max-width: 52em;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .page-intro code {
+        font-size: 0.85em;
+        padding: 2px 7px;
+        border-radius: 6px;
+        background: #fff;
+        border: 1px solid var(--border);
+        color: #334155;
+      }
+
+      .hint {
+        margin-top: 14px;
+        font-size: 0.8rem;
+        color: #94a3b8;
+      }
+
+      .screenshot-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 48px;
+      }
+
+      /* Chrome Web Store 规格：固定 1280 × 800 像素 */
+      .frame {
+        --store-w: 1280px;
+        --store-h: 800px;
+        width: var(--store-w);
+        height: var(--store-h);
+        min-width: var(--store-w);
+        min-height: var(--store-h);
+        max-width: var(--store-w);
+        max-height: var(--store-h);
+        flex-shrink: 0;
+        position: relative;
+        border-radius: 16px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        box-shadow: var(--frame-shadow);
+        background: var(--bg-card);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .frame::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.5;
+        background: var(--frame-tint, radial-gradient(
+            120% 80% at 100% 0%,
+            rgba(37, 99, 235, 0.07),
+            transparent 55%
+          ));
+      }
+
+      .frame--a {
+        --frame-tint: radial-gradient(
+          120% 85% at 92% 8%,
+          rgba(37, 99, 235, 0.11),
+          transparent 50%
+        );
+        --pill-bg: #eff6ff;
+        --pill-text: #1d4ed8;
+        --accent-line: #3b82f6;
+      }
+
+      .frame--b {
+        --frame-tint: radial-gradient(
+          120% 85% at 92% 8%,
+          rgba(79, 70, 229, 0.1),
+          transparent 50%
+        );
+        --pill-bg: #eef2ff;
+        --pill-text: #4338ca;
+        --accent-line: #6366f1;
+      }
+
+      .frame--c {
+        --frame-tint: radial-gradient(
+          120% 85% at 92% 8%,
+          rgba(13, 148, 136, 0.1),
+          transparent 50%
+        );
+        --pill-bg: #f0fdfa;
+        --pill-text: #0f766e;
+        --accent-line: #14b8a6;
+      }
+
+      .frame-topbar {
+        position: relative;
+        z-index: 1;
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 16px 28px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-mark {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        object-fit: contain;
+        display: block;
+        flex-shrink: 0;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+      }
+
+      .brand-text h2 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .brand-text span {
+        display: block;
+        margin-top: 2px;
+        font-size: 0.72rem;
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      .frame-main {
+        position: relative;
+        z-index: 1;
+        flex: 1 1 0;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 1.12fr;
+        gap: 8px 36px;
+        padding: 24px 32px 18px;
+        align-items: stretch;
+      }
+
+      .hero-copy {
+        padding-right: 8px;
+        min-height: 0;
+        max-height: 100%;
+        overflow: hidden;
+      }
+
+      .pill {
+        display: inline-block;
+        padding: 4px 11px;
+        border-radius: 999px;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: none;
+        background: var(--pill-bg);
+        color: var(--pill-text);
+        margin-bottom: 12px;
+      }
+
+      .hero-title {
+        margin: 0 0 12px;
+        font-size: 1.65rem;
+        font-weight: 800;
+        line-height: 1.2;
+        letter-spacing: -0.03em;
+        color: var(--text);
+      }
+
+      .hero-lead {
+        margin: 0 0 18px;
+        font-size: 0.9375rem;
+        line-height: 1.65;
+        color: #475569;
+      }
+
+      .hero-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .hero-list li {
+        position: relative;
+        padding-left: 22px;
+        margin-bottom: 10px;
+        font-size: 0.8125rem;
+        line-height: 1.55;
+        color: #334155;
+      }
+
+      .hero-list li:last-child {
+        margin-bottom: 0;
+      }
+
+      .hero-list li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.5em;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent-line);
+      }
+
+      .hero-shot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+        max-height: 100%;
+        height: 100%;
+      }
+
+      .hero-shot img {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        border-radius: 10px;
+        border: 1px solid var(--img-border);
+        box-shadow: var(--img-shadow);
+      }
+
+      .frame-strip {
+        position: relative;
+        z-index: 1;
+        flex: 0 0 auto;
+        padding: 12px 32px 14px;
+        border-top: 1px solid var(--border);
+        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+        text-align: center;
+      }
+
+      .frame-strip p {
+        margin: 0;
+        font-size: 0.8125rem;
+        color: #64748b;
+        font-weight: 500;
+      }
+
+      .frame-strip strong {
+        color: #475569;
+        font-weight: 600;
+      }
+
+      /* 窄屏横向滚动查看完整 1280×800，不缩放画板尺寸 */
+      .slides-scroll {
+        width: 100%;
+        overflow-x: auto;
+        overflow-y: visible;
+        -webkit-overflow-scrolling: touch;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page-intro">
+      <h1>Jenkins Runner</h1>
+      <p class="lead">
+        Jenkins 轻量编排与状态跟进。以下为 Chrome 网上应用店素材用
+        <strong>1280 × 800</strong>
+        画板固定为 <strong>1280×800 像素</strong>（CSS
+        锁定宽高）；左侧为产品介绍文案，右侧为界面截图。可对单张画板截图用于
+        Chrome 网上应用店。
+      </p>
+      <p class="hint">
+        资源路径 <code>../1.png</code> · <code>../2.png</code> ·
+        <code>../3.png</code>
+      </p>
+    </div>
+
+    <div class="slides-scroll">
+    <div class="screenshot-stack">
+      <!-- 画板 1：自动添加参数 -->
+      <section
+        class="frame frame--a"
+        aria-label="截图 1：自动添加参数"
+      >
+        <header class="frame-topbar">
+          <div class="brand">
+            <img
+              class="brand-mark"
+              src="../../src/assets/icons/icon-128.png"
+              alt=""
+              width="38"
+              height="38"
+            />
+            <div class="brand-text">
+              <h2>Jenkins Runner</h2>
+              <span>浏览器内的 Jenkins 轻量控制台</span>
+            </div>
+          </div>
+        </header>
+        <div class="frame-main">
+          <div class="hero-copy">
+            <span class="pill">智能参数</span>
+            <h3 class="hero-title">自动添加参数</h3>
+            <p class="hero-lead">
+              在触发构建前就完成参数编排：分支、环境、发布方式一次配齐并随
+              Job 固化。下次执行无需回到 Jenkins
+              里逐项填写，把「重复劳动」留在扩展外。
+            </p>
+            <ul class="hero-list">
+              <li>参数模板与 Job 绑定保存，常用组合一键复用、零拷贝粘贴。</li>
+              <li>键名与 Jenkins 声明保持一致，降低手误与环境串线风险。</li>
+              <li>从工具栏到执行面板链路更短，上下文不丢、发布节奏不断档。</li>
+            </ul>
+          </div>
+          <div class="hero-shot">
+            <img
+              src="../1.png"
+              alt="Jenkins Runner：自动添加参数与触发构建"
+              width="620"
+              height="400"
+            />
+          </div>
+        </div>
+        <footer class="frame-strip">
+          <p>
+            <strong>更少点击，更少填表</strong> — 让参数化构建从第一次配置就省心。
+          </p>
+        </footer>
+      </section>
+
+      <!-- 画板 2：Job 的管理界面 -->
+      <section
+        class="frame frame--b"
+        aria-label="截图 2：Job 的管理界面"
+      >
+        <header class="frame-topbar">
+          <div class="brand">
+            <img
+              class="brand-mark"
+              src="../../src/assets/icons/icon-128.png"
+              alt=""
+              width="38"
+              height="38"
+            />
+            <div class="brand-text">
+              <h2>Jenkins Runner</h2>
+              <span>项目维度的流水线入口</span>
+            </div>
+          </div>
+        </header>
+        <div class="frame-main">
+          <div class="hero-copy">
+            <span class="pill">统一管理</span>
+            <h3 class="hero-title">Job 的管理界面</h3>
+            <p class="hero-lead">
+              把散落在书签、文档和口头约定里的 Job
+              入口，收敛到同一套管理视图。按项目浏览、编辑与触发，谁接手都能快速对齐团队里的「标准发布路径」。
+            </p>
+            <ul class="hero-list">
+              <li>多 Job 并列维护，重要流水线检索与触达成本显著降低。</li>
+              <li>地址与凭据落在扩展本地存储，减少在无关页面间复制敏感信息。</li>
+              <li>界面即文档：新人按同一套界面操作，减少「口口相传」的摩擦。</li>
+            </ul>
+          </div>
+          <div class="hero-shot">
+            <img
+              src="../2.png"
+              alt="Jenkins Runner：Job 管理界面"
+              width="620"
+              height="400"
+            />
+          </div>
+        </div>
+        <footer class="frame-strip">
+          <p>
+            <strong>入口清晰，协作简单</strong> — 复杂流水线，从一个管理台开始。
+          </p>
+        </footer>
+      </section>
+
+      <!-- 画板 3：任务进度监控 -->
+      <section
+        class="frame frame--c"
+        aria-label="截图 3：任务进度监控"
+      >
+        <header class="frame-topbar">
+          <div class="brand">
+            <img
+              class="brand-mark"
+              src="../../src/assets/icons/icon-128.png"
+              alt=""
+              width="38"
+              height="38"
+            />
+            <div class="brand-text">
+              <h2>Jenkins Runner</h2>
+              <span>构建状态自动跟进</span>
+            </div>
+          </div>
+        </header>
+        <div class="frame-main">
+          <div class="hero-copy">
+            <span class="pill">进度可视</span>
+            <h3 class="hero-title">任务进度监控</h3>
+            <p class="hero-lead">
+              触发后轮询构建状态：排队、执行、完成全程在扩展内可读。无需反复刷新
+              Jenkins 任务页，也能在第一时间判断成败并跳转到日志与详情。
+            </p>
+            <ul class="hero-list">
+              <li>状态自动刷新，关键发布窗口里减少「盯着浏览器刷新的焦虑」。</li>
+              <li>完成后一键打开构建页 / 日志，排障路径更短。</li>
+              <li>并行关注多任务时，结果聚合呈现，减少漏盯与误读。</li>
+            </ul>
+          </div>
+          <div class="hero-shot">
+            <img
+              src="../3.png"
+              alt="Jenkins Runner：任务进度与构建结果"
+              width="620"
+              height="400"
+            />
+          </div>
+        </div>
+        <footer class="frame-strip">
+          <p>
+            <strong>状态在手，心里不慌</strong> — 发布链路再长，进度也能一眼到底。
+          </p>
+        </footer>
+      </section>
+    </div>
+    </div>
+  </body>
+</html>
