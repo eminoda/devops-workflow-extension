@@ -19,7 +19,7 @@ export default defineManifest({
     extension_pages:
       "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:",
   },
-  permissions: ['storage', 'tabs'],
+  permissions: ['storage'],
   host_permissions: ['http://*/*', 'https://*/*'],
   action: {
     default_title: 'Jenkins Runner',
