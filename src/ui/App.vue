@@ -55,12 +55,15 @@
     </footer>
 
     <Sheet v-model:open="settingsOpen">
-      <SheetContent side="bottom" class="max-h-[min(100vh,calc(85vh+30px))] overflow-y-auto rounded-t-xl">
+      <SheetContent
+        side="bottom"
+        class="app-scrollbar-thin max-h-[min(100vh,calc(85vh+30px))] overflow-y-auto rounded-t-xl"
+      >
         <SheetHeader>
           <SheetTitle>Jenkins 配置</SheetTitle>
         </SheetHeader>
         <div class="mt-4">
-          <JenkinsSettingsForm @saved="onSettingsSaved" />
+          <JenkinsSettingsForm @saved="onSettingsSaved" @save-failed="onSettingsSaveFailed" />
         </div>
       </SheetContent>
     </Sheet>
@@ -142,5 +145,11 @@ onMounted(async () => {
 
 function onSettingsSaved(s: JenkinsSettings) {
   username.value = s.jenkinsUser || ''
+  toast({ title: '配置已保存', variant: 'success' })
+  settingsOpen.value = false
+}
+
+function onSettingsSaveFailed(message: string) {
+  toast({ title: '保存失败', description: message, variant: 'error', timeoutMs: 4000 })
 }
 </script>

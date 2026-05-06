@@ -13,6 +13,7 @@ export async function runJobFromUi(jobId: string): Promise<void> {
   pipelineUiBusy.value = true
   try {
     await runJobAndMaybeChain(jobId, {
+      // 日志行由 runPipeline 输出（delay=0sec 页解析出的全部参数 + 自动取值结果）
       onLog: (l) => {
         pipelineUiLog.value = (pipelineUiLog.value + l + '\n').slice(-8000)
       },

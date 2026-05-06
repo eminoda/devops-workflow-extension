@@ -11,13 +11,14 @@ export interface JobConfig {
   name: string
   /** Jenkins Job 名称：与 URL 中 /job/ 之后的路径段一致，如 T-E-xxx 或 job/A/job/B */
   jobPath: string
-  /** 参数化构建的键值，与 Jenkins 任务参数名一致 */
+  /** 参数化构建的键值：与 Jenkins 表单提交字段名一致（含拆块后的子字段名） */
   displayParams: Record<string, string>
   /** 参数类型配置：输入框 / 下拉框 / 动态参数 */
   paramConfig?: Record<string, JobParamConfig>
   /**
    * 参数自动取值（从 Jenkins “Build with Parameters” 页面抓取）
-   * key 为 Jenkins 参数名（例如 DOCKER_IMAGE）
+   * key 与解析出的表单字段一致：标准模板下为块级参数名（如 REGION），
+   * 拆块时为子控件 name（如 imageName、imageTag）
    */
   paramAutoFill?: Record<string, JobParamAutoFillRule>
   /** 成功后自动触发的下一个 Job id，无则 null */

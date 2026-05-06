@@ -43,7 +43,7 @@
     </div>
     <Separator />
     <div class="space-y-2">
-      <Label for="wecom-global">企微 Webhook（全局，可选）</Label>
+      <Label for="wecom-global">企微 Webhook</Label>
       <Input
         id="wecom-global"
         v-model="form.wecomWebhookGlobal"
@@ -78,6 +78,7 @@ import { defaultSettings } from '@/types'
 
 const emit = defineEmits<{
   saved: [JenkinsSettings]
+  'save-failed': [message: string]
 }>()
 
 const form = reactive<JenkinsSettings>({ ...defaultSettings() })
@@ -119,7 +120,9 @@ async function save() {
     savedAt.value = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
     emit('saved', next)
   } catch (e) {
-    err.value = (e as Error).message
+    const msg = (e as Error).message
+    err.value = msg
+    emit('save-failed', msg)
   } finally {
     saving.value = false
   }

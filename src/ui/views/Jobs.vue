@@ -11,51 +11,61 @@
 
       <NoJobsCard v-if="!jobs.length" @add="addJobAndOpen" />
 
-      <div v-else class="space-y-3">
-        <Card
-          v-for="item in jobsListDisplay"
-          :key="item.job.id"
-          class="border-0 shadow-none"
-          :style="item.depth > 0 ? { marginLeft: `${12 + (item.depth - 1) * 16}px` } : undefined"
-        >
-          <CardContent class="flex items-center gap-2 py-4">
-            <div
-              class="flex h-9 w-5 shrink-0 items-center justify-center text-muted-foreground"
-              :title="item.depth > 0 ? '关联链中的后续 Job' : 'Job 链起点'"
-              aria-hidden="true"
+      <div v-else class="flex flex-col">
+        <template v-for="(item, index) in jobsListDisplay" :key="item.job.id">
+          <Separator v-if="showJobListDivider(index)" class="my-2 shrink-0" />
+          <Card
+            class="border-0 shadow-none"
+            :style="item.depth > 0 ? { marginLeft: `${12 + (item.depth - 1) * 16}px` } : undefined"
+          >
+            <CardContent
+              class="flex items-center gap-2 pb-4"
+              :class="item.depth > 0 ? 'pt-0' : 'pt-4'"
             >
-              <Folder v-if="item.depth === 0" class="h-4 w-4" />
-              <CornerDownRight v-else class="h-4 w-4" />
-            </div>
-            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="openDetail(item.job.id)">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
+              <div
+                class="flex h-9 w-5 shrink-0 items-center justify-center text-muted-foreground"
+                :title="item.depth > 0 ? '关联链中的后续 Job' : 'Job 链起点'"
+                aria-hidden="true"
+              >
+                <Folder v-if="item.depth === 0" class="h-4 w-4" />
+                <CornerDownRight v-else class="h-4 w-4" />
+              </div>
+              <div
+                class="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                role="button"
+                tabindex="0"
+                :aria-label="`打开 ${item.job.name || 'Job'} 详情`"
+                @click="openDetail(item.job.id)"
+                @keydown.enter.prevent="openDetail(item.job.id)"
+                @keydown.space.prevent="openDetail(item.job.id)"
+              >
+                <div class="flex min-w-0 items-center gap-2">
                   <div class="truncate text-sm font-medium">{{ item.job.name || '新 Job' }}</div>
+                  <button
+                    v-if="item.job.verifyUrl?.trim()"
+                    type="button"
+                    class="inline-flex shrink-0 rounded-sm text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    title="打开验证地址"
+                    aria-label="打开验证地址"
+                    @click.stop="openUrlTab(item.job.verifyUrl!.trim())"
+                  >
+                    <ExternalLink class="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
                   <Badge v-if="draftMap[item.job.id]" variant="secondary" class="shrink-0">草稿</Badge>
                 </div>
-                <div class="truncate font-mono text-xs text-muted-foreground">Job：{{ item.job.jobPath || '（未填写）' }}</div>
+                <div class="truncate font-mono text-xs text-muted-foreground">{{ item.job.jobPath || '（未填写）' }}</div>
               </div>
-            </button>
-            <div class="flex shrink-0 items-center gap-1" @click.stop>
-              <Button type="button" size="icon" variant="outline" title="详情" @click="openDetail(item.job.id)">
-                <SlidersHorizontal class="h-4 w-4" />
-              </Button>
-              <Button type="button" size="icon" :disabled="pipelineUiBusy" title="运行" @click="runOne(item.job)">
-                <Play class="h-4 w-4" />
-              </Button>
-              <Button
-                v-if="item.job.verifyUrl"
-                type="button"
-                size="icon"
-                variant="outline"
-                title="验证地址"
-                @click="openUrlTab(item.job.verifyUrl!)"
-              >
-                <ExternalLink class="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              <div class="flex shrink-0 items-center gap-1" @click.stop>
+                <Button type="button" size="icon" variant="outline" title="详情" @click="openDetail(item.job.id)">
+                  <SlidersHorizontal class="h-4 w-4" />
+                </Button>
+                <Button type="button" size="icon" :disabled="pipelineUiBusy" title="运行" @click="runOne(item.job)">
+                  <Play class="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </template>
       </div>
     </template>
 
@@ -280,7 +290,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { parseJenkinsBuildParameterFormHtml } from '@/lib/jenkins-build-form-parse'
+import { defaultParamAutoFillSelectorString } from '@/lib/jenkins-param-autofill-selectors'
+import {
+  joinCompositeParamValue,
+  parseJenkinsBuildParameterFormHtml,
+} from '@/lib/jenkins-build-form-parse'
 import { fetchBuildWithParamsPageHtml, fetchJenkinsFillUrlOptions } from '@/lib/jenkins'
 import { cn } from '@/lib/utils'
 import { loadJobs, loadSettings, saveJobs, STORAGE_RELOAD_EVENT } from '@/lib/storage'
@@ -346,6 +360,13 @@ const jobsListDisplay = computed<JobListRow[]>(() => {
   }
   return rows
 })
+
+/** 相邻两条为父子链（子 depth = 父 depth + 1）时不画分割线 */
+function showJobListDivider(index: number): boolean {
+  const rows = jobsListDisplay.value
+  if (index <= 0) return false
+  return rows[index]!.depth !== rows[index - 1]!.depth + 1
+}
 
 const mode = ref<'list' | 'detail'>('list')
 const selectedJobId = ref<string | null>(null)
@@ -553,8 +574,17 @@ async function syncBuildParamsFromHtml(j: JobConfig) {
           fu,
         )
         if (opts.length) {
-          p.options = opts
-          p.value = opts.includes(p.value) ? p.value : (opts[0] ?? '')
+          const hasComposite = !!(p.compositePrefix?.trim() || p.compositeSuffix?.trim())
+          if (hasComposite) {
+            p.options = opts.map((t) =>
+              joinCompositeParamValue(String(t).trim(), p.compositePrefix, p.compositeSuffix),
+            )
+            const firstComb = p.options[0] ?? ''
+            p.value = p.options.includes(p.value) ? p.value : firstComb
+          } else {
+            p.options = opts
+            p.value = opts.includes(p.value) ? p.value : (opts[0] ?? '')
+          }
         }
       } catch (e) {
         fillUrlErrors.push(`${p.key}: ${(e as Error).message}`)
@@ -628,11 +658,7 @@ watchDebounced(
 )
 
 function defaultSelectorForParam(paramKey: string) {
-  const safe = paramKey.replaceAll('"', '\\"')
-  // Jenkins 参数页常见 DOM 结构：
-  // <input value="PARAM"> 的 nextElementSibling 是 <select>，或 nextElementSibling 内部再包一层 <div><select/></div>
-  // 这里保留 selector 作为兜底（运行时/抓取失败时仍可用），但 UI 抓取会优先按 DOM 同级关系解析。
-  return `input[value="${safe}"] + select, input[value="${safe}"] + * select`
+  return defaultParamAutoFillSelectorString(paramKey)
 }
 
 function ensureDynamicAutoRule(j: JobConfig, paramKey: string) {

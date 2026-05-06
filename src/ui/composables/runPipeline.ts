@@ -4,7 +4,14 @@ import {
   triggerParameterizedBuild,
   buildJobPageUrl,
   fetchBuildWithParamsPageHtml,
+  fetchJenkinsFillUrlOptions,
 } from '@/lib/jenkins'
+import {
+  joinCompositeParamValue,
+  parseJenkinsBuildParameterFormHtml,
+  type ParsedBuildFormParam,
+} from '@/lib/jenkins-build-form-parse'
+import { paramAutoFillSelectorCandidates } from '@/lib/jenkins-param-autofill-selectors'
 import { appendRun, loadJobs, loadSettings, saveJobs, updateRun } from '@/lib/storage'
 import { sendWecomMarkdown } from '@/lib/wecom'
 import type { BuildResult, JobConfig, JenkinsSettings, JobParamAutoFillRule, RunRecord } from '@/types'
@@ -20,6 +27,66 @@ function normalizedJenkinsBuildResult(raw: string | null | undefined): BuildResu
 }
 
 export type BuildAllocatedHandler = (info: { buildUrl: string; buildNumber: number | null }) => void
+
+/**
+ * 按参数页解析结果打「解析策略」日志；fillUrl 结果写入 cache 供后续自动取值复用。
+ */
+async function logParsedBuildFormStrategies(
+  settings: JenkinsSettings,
+  parsed: ParsedBuildFormParam[],
+  fillUrlOptionCache: Map<string, string[]>,
+  log?: (s: string) => void,
+): Promise<void> {
+  const loadFillOpts = async (fillUrl: string): Promise<string[]> => {
+    const u = fillUrl.trim()
+    if (fillUrlOptionCache.has(u)) return fillUrlOptionCache.get(u)!
+    const opts = await fetchJenkinsFillUrlOptions(
+      settings.jenkinsUrl,
+      settings.jenkinsUser,
+      settings.jenkinsToken,
+      u,
+    )
+    fillUrlOptionCache.set(u, opts)
+    return opts
+  }
+
+  for (const p of parsed) {
+    log?.(`解析参数 [${p.key}]`)
+
+    if (p.type === 'text') {
+      const v = String(p.value ?? '').trim() || '（空）'
+      log?.(`解析策略：默认预填 [${v}]`)
+      continue
+    }
+
+    const fillUrl = p.fillUrl?.trim()
+    const asInterfaceLoad = p.type === 'dynamic' || !!fillUrl
+
+    if (asInterfaceLoad) {
+      if (fillUrl) {
+        try {
+          const opts = await loadFillOpts(fillUrl)
+          const rawFirst = opts.length ? String(opts[0]).trim() : '（无）'
+          const first =
+            rawFirst !== '（无）'
+              ? joinCompositeParamValue(rawFirst, p.compositePrefix, p.compositeSuffix)
+              : rawFirst
+          log?.(`解析策略：接口加载 [${first}]`)
+        } catch {
+          const snap = String(p.options[0] ?? p.value ?? '').trim() || '（无）'
+          log?.(`解析策略：接口加载 [${snap}]（接口失败，参数页快照）`)
+        }
+      } else {
+        const snap = String(p.options[0] ?? p.value ?? '').trim() || '（无）'
+        log?.(`解析策略：接口加载 [${snap}]（参数页内选项）`)
+      }
+      continue
+    }
+
+    const first = String(p.options[0] ?? p.value ?? '').trim() || '（无）'
+    log?.(`解析策略：下拉框第一条 [${first}]`)
+  }
+}
 
 function webhookForJob(settings: JenkinsSettings): string {
   return (settings.wecomWebhookGlobal || '').trim()
@@ -196,38 +263,89 @@ async function applyParamAutoFill(
   const entries = Object.entries(rules).filter(([, r]) => r && String(r.selector || '').trim())
   if (!entries.length) return
 
-  log?.(`参数自动取值: 准备从 Jenkins 参数页抓取 ${entries.length} 项…`)
+  // 先拉默认 build?delay=0sec，与 Jobs 详情「从 Jenkins 同步」同一套解析；日志列出全部表单项
+  const defaultHtml = await fetchBuildWithParamsPageHtml(
+    settings.jenkinsUrl,
+    settings.jenkinsUser,
+    settings.jenkinsToken,
+    job.jobPath,
+  )
+  const parsedForm = parseJenkinsBuildParameterFormHtml(defaultHtml)
+  const fillUrlOptionCache = new Map<string, string[]>()
+  if (parsedForm.length) {
+    await logParsedBuildFormStrategies(settings, parsedForm, fillUrlOptionCache, log)
+  } else {
+    log?.('解析参数：（delay=0sec 参数页未解析到任何表单项）')
+  }
 
-  // 同一个 job 只拉一次 HTML（除非某条 rule 指定了 pageUrl）
-  let defaultHtml: string | null = null
+  // 自动取值：无 pageUrl 时复用上列 HTML；有 pageUrl 则单独请求
   const getHtml = async (rule: JobParamAutoFillRule) => {
-    if (rule.pageUrl) {
+    if (rule.pageUrl?.trim()) {
       return await fetchBuildWithParamsPageHtml(
         settings.jenkinsUrl,
         settings.jenkinsUser,
         settings.jenkinsToken,
         job.jobPath,
-        rule.pageUrl
-      )
-    }
-    if (defaultHtml == null) {
-      defaultHtml = await fetchBuildWithParamsPageHtml(
-        settings.jenkinsUrl,
-        settings.jenkinsUser,
-        settings.jenkinsToken,
-        job.jobPath
+        rule.pageUrl,
       )
     }
     return defaultHtml
   }
 
+  const parsedByKey = new Map(parsedForm.map((p) => [p.key.trim(), p]))
+
   for (const [paramKey, rule] of entries) {
-    const selector = rule.selector.trim()
+    const meta = parsedByKey.get(paramKey.trim())
+    const fillUrl = meta?.fillUrl?.trim()
+    // 与「解析策略：接口加载」一致：有 fillUrl 时与 Job 详情同步逻辑相同，走 descriptor JSON，不依赖易过期的 CSS
+    if (fillUrl) {
+      try {
+        let opts = fillUrlOptionCache.get(fillUrl)
+        if (!opts) {
+          opts = await fetchJenkinsFillUrlOptions(
+            settings.jenkinsUrl,
+            settings.jenkinsUser,
+            settings.jenkinsToken,
+            fillUrl,
+          )
+          fillUrlOptionCache.set(fillUrl, opts)
+        }
+        if (opts.length) {
+          const pick = rule.pick ?? 'first'
+          let finalVal = String(pick === 'last' ? opts[opts.length - 1]! : opts[0]!).trim()
+          if (rule.regex) {
+            const re = new RegExp(rule.regex)
+            const m = finalVal.match(re)
+            if (!m) throw new Error(`正则未匹配: ${paramKey} regex=${rule.regex}`)
+            const g = rule.regexGroup ?? 1
+            finalVal = (m[g] ?? m[0] ?? '').trim()
+            if (!finalVal) throw new Error(`正则提取为空: ${paramKey} regex=${rule.regex} group=${g}`)
+          }
+          finalVal = joinCompositeParamValue(finalVal, meta?.compositePrefix, meta?.compositeSuffix)
+          params[paramKey] = finalVal
+          continue
+        }
+        log?.(`参数自动取值: ${paramKey} fillUrl 返回空列表，回退 DOM 选择器…`)
+      } catch (e) {
+        log?.(`参数自动取值: ${paramKey} fillUrl 请求失败，回退 DOM：${(e as Error).message}`)
+      }
+    }
+
     const html = await getHtml(rule)
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    const nodes = Array.from(doc.querySelectorAll(selector))
+    const candidates = paramAutoFillSelectorCandidates(paramKey, rule.selector)
+    let nodes: Element[] = []
+    let matchedSelector = ''
+    for (let i = 0; i < candidates.length; i++) {
+      const sel = candidates[i]!
+      nodes = Array.from(doc.querySelectorAll(sel))
+      if (nodes.length) {
+        matchedSelector = sel
+        break
+      }
+    }
     if (!nodes.length) {
-      throw new Error(`selector 未匹配到元素: ${paramKey} -> ${selector}`)
+      throw new Error(`selector 未匹配到元素: ${paramKey} -> 已尝试: ${candidates.join(' | ')}`)
     }
 
     const pick = rule.pick ?? 'first'
@@ -239,7 +357,7 @@ async function applyParamAutoFill(
       raw = (rule.from ?? 'value') === 'text' ? picked.textContent || '' : picked.value || ''
     } else if (picked instanceof HTMLSelectElement) {
       const opt = picked.options?.item(pick === 'last' ? picked.options.length - 1 : 0)
-      if (!opt) throw new Error(`select 内无 option: ${paramKey} -> ${selector}`)
+      if (!opt) throw new Error(`select 内无 option: ${paramKey} -> ${matchedSelector}`)
       raw = (rule.from ?? 'value') === 'text' ? opt.textContent || '' : opt.value || ''
     } else {
       // 兜底：普通元素取 text / attribute(value)
@@ -251,7 +369,7 @@ async function applyParamAutoFill(
 
     const rawTrim = String(raw).trim()
     if (!rawTrim) {
-      throw new Error(`取到空值: ${paramKey} -> ${selector}`)
+      throw new Error(`取到空值: ${paramKey} -> ${matchedSelector}`)
     }
 
     let finalVal = rawTrim
@@ -263,9 +381,9 @@ async function applyParamAutoFill(
       finalVal = (m[g] ?? m[0] ?? '').trim()
       if (!finalVal) throw new Error(`正则提取为空: ${paramKey} regex=${rule.regex} group=${g}`)
     }
+    finalVal = joinCompositeParamValue(finalVal, meta?.compositePrefix, meta?.compositeSuffix)
 
     params[paramKey] = finalVal
-    log?.(`参数自动取值: ${paramKey} = ${finalVal}`)
   }
 }
 

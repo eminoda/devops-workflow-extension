@@ -34,55 +34,67 @@
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
                 <span class="font-medium">{{ h.jobName || 'Job' }}</span>
-                <span v-if="h.buildNumber" class="text-xs text-muted-foreground">#{{ h.buildNumber }}</span>
+                <button
+                  v-if="h.buildNumber && h.buildUrl"
+                  type="button"
+                  class="inline-flex items-center gap-0.5 rounded-sm text-xs text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  :title="`在 Jenkins 中打开构建 #${h.buildNumber}`"
+                  @click="openUrl(h.buildUrl!)"
+                >
+                  <span>#{{ h.buildNumber }}</span>
+                  <ExternalLink class="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                </button>
+                <span v-else-if="h.buildNumber" class="text-xs text-muted-foreground">#{{ h.buildNumber }}</span>
                 <span
                   v-if="isRunningRow(h)"
-                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border/80 bg-muted/40 text-foreground"
+                  class="inline-flex shrink-0 items-center gap-1"
                   title="执行中"
-                  aria-label="执行中"
                 >
-                  <Loader2 class="h-4 w-4 shrink-0 animate-spin text-primary" aria-hidden="true" />
+                  <button
+                    v-if="jenkinsExtraLinkWhileRunning(h)"
+                    type="button"
+                    class="inline-flex rounded-sm text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    title="在 Jenkins 中打开"
+                    aria-label="在 Jenkins 中打开"
+                    @click="openUrl(jenkinsMonitorLink(h)!)"
+                  >
+                    <ExternalLink class="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                  <Loader2
+                    class="h-4 w-4 animate-spin text-primary"
+                    aria-label="执行中"
+                  />
                 </span>
-                <span
+                <CheckCircle2
                   v-else-if="h.result === 'SUCCESS'"
-                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-green-600/25 bg-green-500/10 text-green-700 dark:text-green-400"
+                  class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400"
                   title="成功"
                   aria-label="成功"
-                >
-                  <CheckCircle2 class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" aria-hidden="true" />
-                </span>
-                <span
+                />
+                <XCircle
                   v-else-if="h.result === 'FAILURE'"
-                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-destructive/30 bg-destructive/10 text-destructive"
+                  class="h-4 w-4 shrink-0 text-destructive"
                   title="失败"
                   aria-label="失败"
-                >
-                  <XCircle class="h-4 w-4 shrink-0" aria-hidden="true" />
-                </span>
-                <span
+                />
+                <AlertTriangle
                   v-else-if="h.result === 'UNSTABLE'"
-                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-amber-500/35 bg-amber-500/10 text-amber-800 dark:text-amber-400"
+                  class="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
                   title="不稳定"
                   aria-label="不稳定"
-                >
-                  <AlertTriangle class="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
-                </span>
-                <span
+                />
+                <Ban
                   v-else-if="h.result === 'ABORTED'"
-                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-muted-foreground/30 bg-muted/50 text-muted-foreground"
+                  class="h-4 w-4 shrink-0 text-muted-foreground"
                   title="已中止"
                   aria-label="已中止"
-                >
-                  <Ban class="h-4 w-4 shrink-0" aria-hidden="true" />
-                </span>
-                <span
+                />
+                <CircleDot
                   v-else-if="h.result"
-                  class="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40"
+                  class="h-4 w-4 shrink-0 text-muted-foreground"
                   :title="String(h.result)"
                   :aria-label="String(h.result)"
-                >
-                  <CircleDot class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                </span>
+                />
               </div>
               <div class="mt-1 text-xs text-muted-foreground">
                 {{ formatTime(h.startTime) }}
@@ -91,14 +103,10 @@
               <div v-if="h.error" class="mt-1 break-all text-xs text-destructive">{{ h.error }}</div>
             </div>
             <div
-              v-if="h.buildUrl"
+              v-if="h.buildUrl && isRunningRow(h)"
               class="ml-auto flex shrink-0 items-center gap-1 self-center"
             >
-              <Button variant="outline" size="icon" type="button" title="打开构建页" @click="openUrl(h.buildUrl!)">
-                <ExternalLink class="h-4 w-4" />
-              </Button>
               <Button
-                v-if="isRunningRow(h)"
                 variant="destructive"
                 size="icon"
                 type="button"
@@ -146,9 +154,9 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { stopJenkinsBuild } from '@/lib/jenkins'
-import { clearRunHistory, loadHistory, loadSettings, reconcileStaleRunRecords } from '@/lib/storage'
-import type { RunRecord } from '@/types'
+import { buildJobPageUrl, stopJenkinsBuild } from '@/lib/jenkins'
+import { clearRunHistory, loadHistory, loadJobs, loadSettings, reconcileStaleRunRecords } from '@/lib/storage'
+import type { JobConfig, RunRecord } from '@/types'
 import { pipelineUiActiveBuildUrl, pipelineUiBusy, pipelineUiLog } from '@/ui/composables/pipelineUiState'
 import { openUrlInNewTab } from '@/ui/composables/runPipeline'
 import { toast } from '@/ui/toast'
@@ -159,6 +167,8 @@ const router = useRouter()
 const history = ref<RunRecord[]>([])
 const stopBusy = ref(false)
 const clearHistBusy = ref(false)
+const jenkinsBase = ref('')
+const jobsById = ref(new Map<string, JobConfig>())
 
 /** 仅当本地尚未落地结束态时视为执行中；reconcileStaleRunRecords 会向 Jenkins 查询并补全已结束记录 */
 function isRunningRow(h: RunRecord) {
@@ -167,6 +177,33 @@ function isRunningRow(h: RunRecord) {
   if (r == null) return true
   if (typeof r === 'string' && !r.trim()) return true
   return false
+}
+
+/**
+ * 执行中且尚无「#构建号 + buildUrl」主链接时，在 loading 旁显示额外 Jenkins 图标（队列入队中等）。
+ */
+function jenkinsExtraLinkWhileRunning(h: RunRecord): boolean {
+  if (h.buildNumber != null && !!(h.buildUrl ?? '').trim()) return false
+  return !!jenkinsMonitorLink(h)
+}
+
+/** 执行中记录：构建页 > 队列页（由 api/json 推导）> 任务主页 */
+function jenkinsMonitorLink(h: RunRecord): string | null {
+  const bu = (h.buildUrl ?? '').trim()
+  if (bu) return bu
+
+  const qu = (h.queueItemApiUrl ?? '').trim()
+  if (qu) {
+    const stripped = qu.replace(/\/api\/json\/?$/i, '')
+    if (stripped) return stripped.endsWith('/') ? stripped : `${stripped}/`
+  }
+
+  const base = jenkinsBase.value.trim()
+  if (!base) return null
+  const job = jobsById.value.get(h.jobId)
+  const path = job?.jobPath?.trim()
+  if (!path) return null
+  return buildJobPageUrl(base, path)
 }
 
 /** 在运行监控页且存在「执行中」时，定时向 Jenkins 拉取构建状态并 reconcile */
@@ -236,6 +273,9 @@ watch(pipelineUiBusy, async (busy, wasBusy) => {
 async function loadHist() {
   console.log('[JenkinsRunner] loadHist 开始')
   const s = await loadSettings()
+  jenkinsBase.value = (s.jenkinsUrl ?? '').trim()
+  const jobs = await loadJobs()
+  jobsById.value = new Map(jobs.map((j) => [j.id, j]))
   const reconciled = await reconcileStaleRunRecords(s)
   history.value = await loadHistory()
   console.log('[JenkinsRunner] loadHist 结束', {
