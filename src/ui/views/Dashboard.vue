@@ -150,14 +150,26 @@ import {
   Square,
   XCircle,
 } from 'lucide-vue-next'
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { buildJobPageUrl, stopJenkinsBuild } from '@/lib/jenkins'
-import { clearRunHistory, loadHistory, loadJobs, loadSettings, reconcileStaleRunRecords } from '@/lib/storage'
+import {
+  clearRunHistory,
+  loadHistory,
+  loadJobs,
+  loadSettings,
+  reconcileStaleRunRecords,
+  subscribeRunHistoryLocalChanges,
+} from '@/lib/storage'
 import type { JobConfig, RunRecord } from '@/types'
-import { pipelineUiActiveBuildUrl, pipelineUiBusy, pipelineUiLog } from '@/ui/composables/pipelineUiState'
+import {
+  pipelineUiActiveBuildUrl,
+  pipelineUiBusy,
+  pipelineUiLog,
+  requestStopActivePipelineBuild,
+} from '@/ui/composables/pipelineUiState'
 import { openUrlInNewTab } from '@/ui/composables/runPipeline'
 import { toast } from '@/ui/toast'
 
@@ -206,46 +218,18 @@ function jenkinsMonitorLink(h: RunRecord): string | null {
   return buildJobPageUrl(base, path)
 }
 
-/** 在运行监控页且存在「执行中」时，定时向 Jenkins 拉取构建状态并 reconcile */
-const needsJenkinsPoll = computed(() => {
-  if (route.name !== 'dashboard') return false
-  if (pipelineUiBusy.value) return true
-  return history.value.some(
-    (h) =>
-      isRunningRow(h) &&
-      (!!(h.buildUrl ?? '').trim() || !!(h.queueItemApiUrl ?? '').trim()),
-  )
+/** background 每 4s reconcile；本地订阅历史存储变化以刷新列表 */
+let unsubRunHistory: (() => void) | null = null
+
+onMounted(() => {
+  unsubRunHistory = subscribeRunHistoryLocalChanges(() => {
+    if (route.name === 'dashboard') void loadHist()
+  })
 })
 
-let jenkinsPollTimer: ReturnType<typeof setInterval> | null = null
-
-watch(
-  needsJenkinsPoll,
-  (need) => {
-    console.log('[JenkinsRunner] needsJenkinsPoll', {
-      need,
-      routeName: route.name,
-      pipelineBusy: pipelineUiBusy.value,
-      runningWithBuildUrl: history.value.filter(
-        (h) => isRunningRow(h) && !!(h.buildUrl ?? '').trim(),
-      ).length,
-    })
-    if (jenkinsPollTimer) {
-      clearInterval(jenkinsPollTimer)
-      jenkinsPollTimer = null
-    }
-    if (!need) return
-    jenkinsPollTimer = setInterval(() => void loadHist(), 4000)
-    void loadHist()
-  },
-  { immediate: true },
-)
-
 onUnmounted(() => {
-  if (jenkinsPollTimer) {
-    clearInterval(jenkinsPollTimer)
-    jenkinsPollTimer = null
-  }
+  unsubRunHistory?.()
+  unsubRunHistory = null
 })
 
 function goJobs() {
@@ -311,9 +295,19 @@ async function stopBuildByUrl(buildUrl: string) {
 }
 
 async function stopActiveBuild() {
-  const u = pipelineUiActiveBuildUrl.value
-  if (!u) return
-  await stopBuildByUrl(u)
+  if (!pipelineUiActiveBuildUrl.value) return
+  stopBusy.value = true
+  try {
+    const r = await requestStopActivePipelineBuild()
+    if (!r.ok) {
+      toast({ title: '停止失败', description: r.error ?? '未知错误', variant: 'error', timeoutMs: 4000 })
+      return
+    }
+    toast({ title: '已请求停止构建', variant: 'success' })
+    await loadHist()
+  } finally {
+    stopBusy.value = false
+  }
 }
 
 async function stopHistoryBuild(h: RunRecord) {

@@ -415,7 +415,12 @@ onUnmounted(() => {
 
 async function runOne(j: JobConfig) {
   void router.push('/')
-  await runJobFromUi(j.id)
+  try {
+    await runJobFromUi(j.id)
+  } catch (e) {
+    toast({ title: '无法启动', description: (e as Error).message, variant: 'error', timeoutMs: 4000 })
+    return
+  }
   jobs.value = await loadJobs()
 }
 

@@ -84,6 +84,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import JenkinsSettingsForm from '@/components/settings/JenkinsSettingsForm.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import { exportBackupToFile, importBackupFromJsonString, loadSettings } from '@/lib/storage'
+import { registerPipelineSessionSync } from '@/ui/composables/pipelineUiState'
 import { toast } from '@/ui/toast'
 import type { JenkinsSettings } from '@/types'
 
@@ -139,6 +140,7 @@ const tab = computed<string>({
 })
 
 onMounted(async () => {
+  registerPipelineSessionSync()
   const s = await loadSettings()
   username.value = s.jenkinsUser || ''
 })

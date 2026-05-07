@@ -259,6 +259,15 @@ export async function clearRunHistory(): Promise<void> {
   await saveHistory([])
 }
 
+/** 本地运行历史写入变化时回调（含 background reconcile 更新） */
+export function subscribeRunHistoryLocalChanges(callback: () => void): () => void {
+  const fn: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (changes, area) => {
+    if (area === 'local' && K_HISTORY in changes) callback()
+  }
+  chrome.storage.onChanged.addListener(fn)
+  return () => chrome.storage.onChanged.removeListener(fn)
+}
+
 /** 同一 Job 再次执行时，先移除该 jobId 的旧记录，仅保留本次新插入的一条（避免历史列表堆叠同一任务） */
 export async function appendRun(item: RunRecord): Promise<void> {
   const cur = await loadHistory()
