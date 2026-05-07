@@ -1,4 +1,5 @@
 import type { JobParamInputType } from '@/types'
+import { parseHtmlToDocument } from '@/lib/parse-html-document'
 
 export interface ParsedBuildFormParam {
   /** 提交到 Jenkins 的参数名 */
@@ -54,17 +55,25 @@ function parameterControlScope(hiddenNameInput: HTMLInputElement): Element {
   )
 }
 
+function isSelectEl(n: Element): n is HTMLSelectElement {
+  return n.tagName?.toUpperCase() === 'SELECT'
+}
+
+function isInputEl(n: Element): n is HTMLInputElement {
+  return n.tagName?.toUpperCase() === 'INPUT'
+}
+
 /** 标准模板 1–3 均不满足时：按文档序收集各真实表单项，key 为控件自身的 `name`（不含 DOCKER_IMAGE 等块级 hidden name）。 */
 function collectDecomposedControls(scope: Element): Array<HTMLInputElement | HTMLSelectElement> {
   const out: Array<HTMLInputElement | HTMLSelectElement> = []
   for (const node of scope.querySelectorAll('input, select')) {
-    if (node instanceof HTMLSelectElement) {
+    if (isSelectEl(node)) {
       const nm = (node.name || '').trim()
       if (!nm || META_NAMES.has(nm)) continue
       out.push(node)
       continue
     }
-    if (node instanceof HTMLInputElement) {
+    if (isInputEl(node)) {
       const nm = (node.name || '').trim()
       if (!nm || META_NAMES.has(nm)) continue
       const t = (node.type || '').toLowerCase()
@@ -84,7 +93,7 @@ function parsedFromNamedControl(
   const blockDisplay = blockLabel || blockParamKey
   const label = `${blockDisplay} · ${fieldKey}`
 
-  if (el instanceof HTMLSelectElement) {
+  if (isSelectEl(el)) {
     const opts = optionValues(el)
     const fillUrl = readFillUrl(el)
     const isDynamic = !!fillUrl || isGitDynamicSelect(el)
@@ -126,7 +135,7 @@ function parseFormItem(item: Element): ParsedBuildFormParam[] {
 
   // 1. 标准文本框：input[name="value"] 的 value → 参数 key 为块级 hidden name
   const textValue = Array.from(scope.querySelectorAll('input[name="value"]')).find(
-    (n): n is HTMLInputElement => n instanceof HTMLInputElement && isTextLikeValueInput(n),
+    (n): n is HTMLInputElement => isInputEl(n) && isTextLikeValueInput(n),
   )
   if (textValue) {
     return [
@@ -202,7 +211,7 @@ export function joinCompositeParamValue(
  * 否则拆分为各子控件自身的 `name` 作为 key。
  */
 export function parseJenkinsBuildParameterFormHtml(html: string): ParsedBuildFormParam[] {
-  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const doc = parseHtmlToDocument(html)
   const form = doc.querySelector('form.jenkins-form')
   if (!form) return []
 

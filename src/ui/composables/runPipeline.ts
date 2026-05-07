@@ -12,6 +12,7 @@ import {
   type ParsedBuildFormParam,
 } from '@/lib/jenkins-build-form-parse'
 import { paramAutoFillSelectorCandidates } from '@/lib/jenkins-param-autofill-selectors'
+import { parseHtmlToDocument } from '@/lib/parse-html-document'
 import { appendRun, loadJobs, loadSettings, saveJobs, updateRun } from '@/lib/storage'
 import { sendWecomMarkdown } from '@/lib/wecom'
 import type { BuildResult, JobConfig, JenkinsSettings, JobParamAutoFillRule, RunRecord } from '@/types'
@@ -108,18 +109,14 @@ export async function runJobAndMaybeChain(
   const job = jobs.find((j) => j.id === startJobId)
   if (!job) throw new Error('未找到该 Job 配置')
 
-  // 先铺「上次成功」再被 Jobs 里保存的 displayParams 覆盖，避免详情里改了下拉/保存后仍沿用旧成功构建的参数
-  const params = { ...(job.lastSuccessParams || {}), ...(job.displayParams || {}) }
+  // 仅使用 Jobs 中保存的 displayParams，不再合并「上次成功」参数，避免与「执行时取最新」语义混淆
+  const params = { ...(job.displayParams || {}) }
   if (Object.keys(params).length === 0) {
     log?.('提示: 未配置任何参数。若 Jenkins 该任务需要参数，构建可能失败。')
   }
 
-  // 参数自动取值：从 Jenkins 参数页抓取动态下拉的最新 option
-  try {
-    await applyParamAutoFill(settings, job, params, log)
-  } catch (e) {
-    log?.(`参数自动取值失败（将继续使用原值）: ${(e as Error).message}`)
-  }
+  // 参数自动取值失败则中止：不向 Jenkins 触发构建（链式任务同理）
+  await applyParamAutoFill(settings, job, params, log)
 
   const runId = crypto.randomUUID()
   const rec: RunRecord = {
@@ -332,7 +329,7 @@ async function applyParamAutoFill(
     }
 
     const html = await getHtml(rule)
-    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const doc = parseHtmlToDocument(html)
     const candidates = paramAutoFillSelectorCandidates(paramKey, rule.selector)
     let nodes: Element[] = []
     let matchedSelector = ''
@@ -349,14 +346,19 @@ async function applyParamAutoFill(
     }
 
     const pick = rule.pick ?? 'first'
-    const picked = pick === 'last' ? nodes[nodes.length - 1] : nodes[0]
+    const picked = pick === 'last' ? nodes[nodes.length - 1]! : nodes[0]!
+    const pickedTag = (picked.tagName || '').toUpperCase()
 
-    // selector 既可以指向 select，也可以指向 option/其它元素
+    // selector 既可以指向 select，也可以指向 option/其它元素（linkedom 节点不用 instanceof）
     let raw = ''
-    if (picked instanceof HTMLOptionElement) {
-      raw = (rule.from ?? 'value') === 'text' ? picked.textContent || '' : picked.value || ''
-    } else if (picked instanceof HTMLSelectElement) {
-      const opt = picked.options?.item(pick === 'last' ? picked.options.length - 1 : 0)
+    if (pickedTag === 'OPTION') {
+      raw =
+        (rule.from ?? 'value') === 'text'
+          ? picked.textContent || ''
+          : picked.getAttribute('value') || (picked as HTMLSelectElement).value || ''
+    } else if (pickedTag === 'SELECT') {
+      const sel = picked as HTMLSelectElement
+      const opt = sel.options?.item(pick === 'last' ? sel.options.length - 1 : 0)
       if (!opt) throw new Error(`select 内无 option: ${paramKey} -> ${matchedSelector}`)
       raw = (rule.from ?? 'value') === 'text' ? opt.textContent || '' : opt.value || ''
     } else {
