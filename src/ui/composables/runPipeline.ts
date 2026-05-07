@@ -108,8 +108,8 @@ export async function runJobAndMaybeChain(
   const job = jobs.find((j) => j.id === startJobId)
   if (!job) throw new Error('未找到该 Job 配置')
 
-  // 默认使用「上次成功」参数；若没有，则回退到当前配置参数
-  const params = { ...(job.lastSuccessParams || job.displayParams || {}) }
+  // 先铺「上次成功」再被 Jobs 里保存的 displayParams 覆盖，避免详情里改了下拉/保存后仍沿用旧成功构建的参数
+  const params = { ...(job.lastSuccessParams || {}), ...(job.displayParams || {}) }
   if (Object.keys(params).length === 0) {
     log?.('提示: 未配置任何参数。若 Jenkins 该任务需要参数，构建可能失败。')
   }
