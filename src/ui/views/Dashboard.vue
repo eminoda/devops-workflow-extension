@@ -42,7 +42,7 @@
                   @click="openUrl(h.buildUrl!)"
                 >
                   <span>#{{ h.buildNumber }}</span>
-                  <ExternalLink class="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                  <Link class="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
                 </button>
                 <span v-else-if="h.buildNumber" class="text-xs text-muted-foreground">#{{ h.buildNumber }}</span>
                 <span
@@ -58,7 +58,7 @@
                     aria-label="在 Jenkins 中打开"
                     @click="openUrl(jenkinsMonitorLink(h)!)"
                   >
-                    <ExternalLink class="h-3.5 w-3.5" aria-hidden="true" />
+                    <Link class="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
                   <Loader2
                     class="h-4 w-4 animate-spin text-primary"
@@ -101,6 +101,29 @@
                 <template v-if="h.endTime"> – {{ formatTime(h.endTime) }} </template>
               </div>
               <div v-if="h.error" class="mt-1 break-all text-xs text-destructive">{{ h.error }}</div>
+              <div v-if="lastSuccessParamsSnapshot(h.jobId)" class="mt-2">
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  :aria-expanded="lastSuccessExpandedRunId === h.id"
+                  :aria-controls="'last-success-' + h.id"
+                  @click="toggleLastSuccessPanel(h.id)"
+                >
+                  <ChevronRight
+                    class="h-3.5 w-3.5 shrink-0 transition-transform"
+                    :class="{ 'rotate-90': lastSuccessExpandedRunId === h.id }"
+                    aria-hidden="true"
+                  />
+                  上次成功参数（Job 维度）
+                </button>
+                <div
+                  v-show="lastSuccessExpandedRunId === h.id"
+                  :id="`last-success-${h.id}`"
+                  class="mt-1.5 max-h-40 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed text-foreground"
+                >
+                  <pre class="whitespace-pre-wrap break-all">{{ formatLastSuccessJson(lastSuccessParamsSnapshot(h.jobId)) }}</pre>
+                </div>
+              </div>
             </div>
             <div
               v-if="h.buildUrl && isRunningRow(h)"
@@ -144,8 +167,9 @@ import {
   AlertTriangle,
   Ban,
   CheckCircle2,
+  ChevronRight,
   CircleDot,
-  ExternalLink,
+  Link,
   Loader2,
   Square,
   XCircle,
@@ -181,6 +205,8 @@ const stopBusy = ref(false)
 const clearHistBusy = ref(false)
 const jenkinsBase = ref('')
 const jobsById = ref(new Map<string, JobConfig>())
+/** 运行监控卡片：展开「上次成功参数」的记录 id（与 Job 中保存的快照对应） */
+const lastSuccessExpandedRunId = ref<string | null>(null)
 
 /** 仅当本地尚未落地结束态时视为执行中；reconcileStaleRunRecords 会向 Jenkins 查询并补全已结束记录 */
 function isRunningRow(h: RunRecord) {
@@ -262,6 +288,12 @@ async function loadHist() {
   jobsById.value = new Map(jobs.map((j) => [j.id, j]))
   const reconciled = await reconcileStaleRunRecords(s)
   history.value = await loadHistory()
+  if (
+    lastSuccessExpandedRunId.value &&
+    !history.value.some((row) => row.id === lastSuccessExpandedRunId.value)
+  ) {
+    lastSuccessExpandedRunId.value = null
+  }
   console.log('[JenkinsRunner] loadHist 结束', {
     reconcileReturned: reconciled,
     historyLength: history.value.length,
@@ -270,6 +302,25 @@ async function loadHist() {
 
 function formatTime(t: number) {
   return new Date(t).toLocaleString()
+}
+
+function lastSuccessParamsSnapshot(jobId: string): Record<string, string> | null {
+  const p = jobsById.value.get(jobId)?.lastSuccessParams
+  if (!p || typeof p !== 'object') return null
+  return Object.keys(p).length ? p : null
+}
+
+function formatLastSuccessJson(p: Record<string, string> | null): string {
+  if (!p) return ''
+  try {
+    return JSON.stringify(p, null, 2)
+  } catch {
+    return String(p)
+  }
+}
+
+function toggleLastSuccessPanel(runId: string) {
+  lastSuccessExpandedRunId.value = lastSuccessExpandedRunId.value === runId ? null : runId
 }
 
 function openUrl(u: string) {

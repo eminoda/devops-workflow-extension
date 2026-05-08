@@ -11,15 +11,22 @@ export interface ParsedBuildFormParam {
   options: string[]
   /** select 上 descriptor 的 fillUrl/fillurl，需用 Basic 请求后取 JSON values */
   fillUrl?: string
-  /**
-   * fillUrl 对应的那项 `select` 之前各子项（input 取值、其前各 select 的第一条）按文档序用 `:` 拼成。
-   * 当前解析策略仅处理「hidden name + 同块控件」，多段组合参数不再由此生成。
-   */
   compositePrefix?: string
-  /**
-   * fillUrl 对应 `select` 之后各子项（input、select 的第一条）按文档序用 `:` 拼成；无则省略。
-   */
   compositeSuffix?: string
+  /** 无标准 name=value 时：块级首行，value 取末子字段 */
+  compositeBlockLeader?: boolean
+  /** 子字段：UI 缩进，归属块级 key */
+  parentBlockKey?: string
+}
+
+export interface ParseJenkinsBuildFormAsyncContext {
+  fetchFillUrlOptions: (url: string) => Promise<string[]>
+}
+
+export interface ParseJenkinsBuildFormAsyncResult {
+  params: ParsedBuildFormParam[]
+  /** 与 Jobs 同步页一致：`${key}: ${message}` */
+  fillUrlErrors: string[]
 }
 
 const META_NAMES = new Set(['name', 'description'])
@@ -30,29 +37,13 @@ function optionValues(sel: HTMLSelectElement): string[] {
     .filter(Boolean)
 }
 
-function isTextLikeValueInput(inp: HTMLInputElement): boolean {
-  const t = (inp.type || '').toLowerCase()
-  return t === 'text' || t === 'search' || t === 'url' || t === 'password' || t === ''
-}
-
 function isGitDynamicSelect(sel: HTMLSelectElement): boolean {
   return sel.classList.contains('gitParameterSelect') || sel.id === 'gitParameterSelect'
 }
 
-function readFillUrl(sel: HTMLSelectElement): string | undefined {
+export function readFillUrl(sel: HTMLSelectElement): string | undefined {
   const fr = sel.getAttribute('fillurl') || sel.getAttribute('fillUrl')
   return fr?.trim() || undefined
-}
-
-/**
- * 与 `input[name="name"][type="hidden"]` 同一块内的控件（Jenkins 中通常为相邻兄弟所在容器）。
- */
-function parameterControlScope(hiddenNameInput: HTMLInputElement): Element {
-  return (
-    hiddenNameInput.parentElement ??
-    hiddenNameInput.closest('.jenkins-form-item') ??
-    hiddenNameInput.ownerDocument.documentElement
-  )
 }
 
 function isSelectEl(n: Element): n is HTMLSelectElement {
@@ -63,57 +54,39 @@ function isInputEl(n: Element): n is HTMLInputElement {
   return n.tagName?.toUpperCase() === 'INPUT'
 }
 
-/** 标准模板 1–3 均不满足时：按文档序收集各真实表单项，key 为控件自身的 `name`（不含 DOCKER_IMAGE 等块级 hidden name）。 */
-function collectDecomposedControls(scope: Element): Array<HTMLInputElement | HTMLSelectElement> {
-  const out: Array<HTMLInputElement | HTMLSelectElement> = []
-  for (const node of scope.querySelectorAll('input, select')) {
-    if (isSelectEl(node)) {
-      const nm = (node.name || '').trim()
-      if (!nm || META_NAMES.has(nm)) continue
-      out.push(node)
-      continue
-    }
-    if (isInputEl(node)) {
-      const nm = (node.name || '').trim()
-      if (!nm || META_NAMES.has(nm)) continue
-      const t = (node.type || '').toLowerCase()
-      if (t === 'submit' || t === 'button' || t === 'image' || t === 'reset') continue
-      out.push(node)
-    }
-  }
-  return out
+function isSkippableInput(inp: HTMLInputElement): boolean {
+  const t = (inp.type || '').toLowerCase()
+  return t === 'submit' || t === 'button' || t === 'image' || t === 'reset'
 }
 
-function parsedFromNamedControl(
-  el: HTMLInputElement | HTMLSelectElement,
+/** formItem 下第一个标准 value 控件：input[name=value] 或 select[name=value]（文档序） */
+function findStandardValueControl(formItem: Element): HTMLInputElement | HTMLSelectElement | null {
+  const nodes = formItem.querySelectorAll('input[name="value"], select[name="value"]')
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]!
+    if (isSelectEl(n)) return n
+    if (isInputEl(n) && !isSkippableInput(n)) return n
+  }
+  return null
+}
+
+function controlKey(el: HTMLInputElement | HTMLSelectElement): string {
+  return (el.name || '').trim()
+}
+
+function parseInputToParam(
+  inp: HTMLInputElement,
+  fieldKey: string,
   blockLabel: string,
   blockParamKey: string,
 ): ParsedBuildFormParam {
-  const fieldKey = (el.name || '').trim()
   const blockDisplay = blockLabel || blockParamKey
   const label = `${blockDisplay} · ${fieldKey}`
-
-  if (isSelectEl(el)) {
-    const opts = optionValues(el)
-    const fillUrl = readFillUrl(el)
-    const isDynamic = !!fillUrl || isGitDynamicSelect(el)
-    return {
-      key: fieldKey,
-      label,
-      type: isDynamic ? 'dynamic' : 'choice',
-      value: opts[0] ?? '',
-      options: opts,
-      fillUrl,
-    }
-  }
-
-  const inp = el
   const t = (inp.type || '').toLowerCase()
   if (t === 'checkbox' || t === 'radio') {
     const v = inp.checked ? String(inp.value ?? '').trim() || 'on' : ''
     return { key: fieldKey, label, type: 'text', value: v, options: [] }
   }
-
   return {
     key: fieldKey,
     label,
@@ -123,71 +96,256 @@ function parsedFromNamedControl(
   }
 }
 
-function parseFormItem(item: Element): ParsedBuildFormParam[] {
-  const hiddenName = item.querySelector('input[type="hidden"][name="name"]') as HTMLInputElement | null
+function selectParamFromOptions(
+  sel: HTMLSelectElement,
+  key: string,
+  label: string,
+  options: string[],
+): ParsedBuildFormParam {
+  const fillUrl = readFillUrl(sel)
+  const isDynamic = !!fillUrl || isGitDynamicSelect(sel)
+  const opts = options.length ? options : optionValues(sel)
+  return {
+    key,
+    label,
+    type: isDynamic ? 'dynamic' : 'choice',
+    value: opts[0] ?? '',
+    options: opts,
+    fillUrl: fillUrl || undefined,
+  }
+}
+
+/** 无标准 name=value：首行块名（value=末子字段）+ 子行带 parentBlockKey */
+function expandBlockWithoutStandardValue(
+  paramKey: string,
+  blockLabel: string,
+  multiResults: ParsedBuildFormParam[],
+): ParsedBuildFormParam[] {
+  if (multiResults.length === 0) return []
+  const last = multiResults[multiResults.length - 1]!
+  const leader: ParsedBuildFormParam = {
+    key: paramKey,
+    label: blockLabel || paramKey,
+    type: 'text',
+    value: last.value,
+    options: [],
+    compositeBlockLeader: true,
+  }
+  const withParent = multiResults.map((p) => ({
+    ...p,
+    parentBlockKey: paramKey,
+  }))
+  return [leader, ...withParent]
+}
+
+/** 解析标准 value：input 文本/勾选；select 用已有 options */
+function standardValueToParam(
+  el: HTMLInputElement | HTMLSelectElement,
+  paramKey: string,
+  blockLabel: string,
+): ParsedBuildFormParam {
+  const label = blockLabel || paramKey
+  if (isSelectEl(el)) {
+    return selectParamFromOptions(el, paramKey, label, optionValues(el))
+  }
+  const inp = el
+  const t = (inp.type || '').toLowerCase()
+  if (t === 'checkbox' || t === 'radio') {
+    const v = inp.checked ? String(inp.value ?? '').trim() || 'on' : ''
+    return { key: paramKey, label, type: 'text', value: v, options: [] }
+  }
+  return {
+    key: paramKey,
+    label,
+    type: 'text',
+    value: String(inp.value ?? ''),
+    options: [],
+  }
+}
+
+async function resolveSelectOptionsWithNetwork(
+  sel: HTMLSelectElement,
+  keyForError: string,
+  ctx: {
+    fetchFillUrlOptions: (url: string) => Promise<string[]>
+    fillUrlCache: Map<string, Promise<string[]>>
+    fillUrlErrors: string[]
+  },
+): Promise<string[]> {
+  const fillUrl = readFillUrl(sel)
+  if (!fillUrl) return optionValues(sel)
+  const u = fillUrl.trim()
+  if (!ctx.fillUrlCache.has(u)) {
+    ctx.fillUrlCache.set(u, ctx.fetchFillUrlOptions(u))
+  }
+  try {
+    const opts = await ctx.fillUrlCache.get(u)!
+    return opts.length ? opts : optionValues(sel)
+  } catch (e) {
+    ctx.fillUrlErrors.push(`${keyForError}: ${(e as Error).message}`)
+    return optionValues(sel)
+  }
+}
+
+async function standardValueToParamAsync(
+  el: HTMLInputElement | HTMLSelectElement,
+  paramKey: string,
+  blockLabel: string,
+  ctx: {
+    fetchFillUrlOptions: (url: string) => Promise<string[]>
+    fillUrlCache: Map<string, Promise<string[]>>
+    fillUrlErrors: string[]
+  },
+): Promise<ParsedBuildFormParam> {
+  const label = blockLabel || paramKey
+  if (isSelectEl(el)) {
+    const options = await resolveSelectOptionsWithNetwork(el, paramKey, ctx)
+    return selectParamFromOptions(el, paramKey, label, options)
+  }
+  return standardValueToParam(el, paramKey, blockLabel)
+}
+
+async function multiControlToParamAsync(
+  el: HTMLInputElement | HTMLSelectElement,
+  labelText: string,
+  blockParamKey: string,
+  ctx: {
+    fetchFillUrlOptions: (url: string) => Promise<string[]>
+    fillUrlCache: Map<string, Promise<string[]>>
+    fillUrlErrors: string[]
+  },
+): Promise<ParsedBuildFormParam | null> {
+  const fieldKey = controlKey(el)
+  if (!fieldKey || META_NAMES.has(fieldKey)) return null
+
+  if (isSelectEl(el)) {
+    const options = await resolveSelectOptionsWithNetwork(el, fieldKey, ctx)
+    const blockDisplay = labelText || blockParamKey
+    const label = `${blockDisplay} · ${fieldKey}`
+    return selectParamFromOptions(el, fieldKey, label, options)
+  }
+
+  const inp = el
+  if (isSkippableInput(inp)) return null
+  return parseInputToParam(inp, fieldKey, labelText, blockParamKey)
+}
+
+function multiControlToParamSync(
+  el: HTMLInputElement | HTMLSelectElement,
+  labelText: string,
+  blockParamKey: string,
+): ParsedBuildFormParam | null {
+  const fieldKey = controlKey(el)
+  if (!fieldKey || META_NAMES.has(fieldKey)) return null
+
+  if (isSelectEl(el)) {
+    const blockDisplay = labelText || blockParamKey
+    const label = `${blockDisplay} · ${fieldKey}`
+    return selectParamFromOptions(el, fieldKey, label, optionValues(el))
+  }
+
+  const inp = el
+  if (isSkippableInput(inp)) return null
+  return parseInputToParam(inp, fieldKey, labelText, blockParamKey)
+}
+
+async function parseFormItemAsync(
+  formItem: Element,
+  ctx: {
+    fetchFillUrlOptions: (url: string) => Promise<string[]>
+    fillUrlCache: Map<string, Promise<string[]>>
+    fillUrlErrors: string[]
+  },
+): Promise<ParsedBuildFormParam[]> {
+  const hiddenName = formItem.querySelector('input[type="hidden"][name="name"]') as HTMLInputElement | null
   if (!hiddenName) return []
   const paramKey = hiddenName.value?.trim()
   if (!paramKey) return []
 
-  const labelText = item.querySelector('.jenkins-form-label')?.textContent?.trim() || ''
-  const label = labelText || paramKey
-  const scope = parameterControlScope(hiddenName)
+  const labelText = formItem.querySelector('.jenkins-form-label')?.textContent?.trim() || ''
+  const used = new Set<Element>([hiddenName])
 
-  // 1. 标准文本框：input[name="value"] 的 value → 参数 key 为块级 hidden name
-  const textValue = Array.from(scope.querySelectorAll('input[name="value"]')).find(
-    (n): n is HTMLInputElement => isInputEl(n) && isTextLikeValueInput(n),
-  )
-  if (textValue) {
-    return [
-      {
-        key: paramKey,
-        label,
-        type: 'text',
-        value: String(textValue.value ?? ''),
-        options: [],
-      },
-    ]
+  const standardEl = findStandardValueControl(formItem)
+  const out: ParsedBuildFormParam[] = []
+
+  if (standardEl) {
+    used.add(standardEl)
+    out.push(await standardValueToParamAsync(standardEl, paramKey, labelText || paramKey, ctx))
+  } else {
+    const multiResults: ParsedBuildFormParam[] = []
+    const children = formItem.querySelectorAll('input, select')
+    for (let i = 0; i < children.length; i++) {
+      const node = children[i]!
+      if (used.has(node)) continue
+      if (!isInputEl(node) && !isSelectEl(node)) continue
+      const el = node as HTMLInputElement | HTMLSelectElement
+      const p = await multiControlToParamAsync(el, labelText, paramKey, ctx)
+      if (p) multiResults.push(p)
+    }
+    if (multiResults.length > 0) {
+      out.push(...expandBlockWithoutStandardValue(paramKey, labelText || paramKey, multiResults))
+    }
+    return out
   }
 
-  // 2. 标准单下拉：带 fillUrl 的 select
-  const fillSelect = Array.from(scope.querySelectorAll('select')).find((sel) => readFillUrl(sel))
-  if (fillSelect) {
-    const opts = optionValues(fillSelect)
-    const fillUrl = readFillUrl(fillSelect)!
-    return [
-      {
-        key: paramKey,
-        label,
-        type: 'dynamic',
-        value: opts[0] ?? '',
-        options: opts.length ? opts : [],
-        fillUrl,
-      },
-    ]
+  const nodeList = formItem.querySelectorAll('input, select')
+  for (let i = 0; i < nodeList.length; i++) {
+    const node = nodeList[i]!
+    if (used.has(node)) continue
+    if (!isInputEl(node) && !isSelectEl(node)) continue
+
+    const el = node as HTMLInputElement | HTMLSelectElement
+    const p = await multiControlToParamAsync(el, labelText, paramKey, ctx)
+    if (p) out.push(p)
   }
 
-  // 3. 标准单下拉：select[name="value"]
-  const selectValue = scope.querySelector('select[name="value"]') as HTMLSelectElement | null
-  if (selectValue) {
-    const opts = optionValues(selectValue)
-    const fillUrl = readFillUrl(selectValue)
-    const isDynamic = !!fillUrl || isGitDynamicSelect(selectValue)
-    return [
-      {
-        key: paramKey,
-        label,
-        type: isDynamic ? 'dynamic' : 'choice',
-        value: opts[0] ?? '',
-        options: opts,
-        fillUrl,
-      },
-    ]
+  return out
+}
+
+function parseFormItemSync(formItem: Element): ParsedBuildFormParam[] {
+  const hiddenName = formItem.querySelector('input[type="hidden"][name="name"]') as HTMLInputElement | null
+  if (!hiddenName) return []
+  const paramKey = hiddenName.value?.trim()
+  if (!paramKey) return []
+
+  const labelText = formItem.querySelector('.jenkins-form-label')?.textContent?.trim() || ''
+  const used = new Set<Element>([hiddenName])
+
+  const standardEl = findStandardValueControl(formItem)
+  const out: ParsedBuildFormParam[] = []
+
+  if (standardEl) {
+    used.add(standardEl)
+    out.push(standardValueToParam(standardEl, paramKey, labelText || paramKey))
+  } else {
+    const multiResults: ParsedBuildFormParam[] = []
+    const children = formItem.querySelectorAll('input, select')
+    for (let i = 0; i < children.length; i++) {
+      const node = children[i]!
+      if (used.has(node)) continue
+      if (!isInputEl(node) && !isSelectEl(node)) continue
+      const el = node as HTMLInputElement | HTMLSelectElement
+      const p = multiControlToParamSync(el, labelText, paramKey)
+      if (p) multiResults.push(p)
+    }
+    if (multiResults.length > 0) {
+      out.push(...expandBlockWithoutStandardValue(paramKey, labelText || paramKey, multiResults))
+    }
+    return out
   }
 
-  // 4. 非标准模板：不产出块级 key（如 DOCKER_IMAGE），按子字段 name 各解析一条（如 imageName、imageTag）
-  const fields = collectDecomposedControls(scope)
-  if (!fields.length) return []
-  return fields.map((el) => parsedFromNamedControl(el, labelText, paramKey))
+  const nodeList = formItem.querySelectorAll('input, select')
+  for (let i = 0; i < nodeList.length; i++) {
+    const node = nodeList[i]!
+    if (used.has(node)) continue
+    if (!isInputEl(node) && !isSelectEl(node)) continue
+
+    const el = node as HTMLInputElement | HTMLSelectElement
+    const p = multiControlToParamSync(el, labelText, paramKey)
+    if (p) out.push(p)
+  }
+
+  return out
 }
 
 /** 将接口/选项中的一段与前后缀拼成最终参数值（与 runPipeline / Jobs 共用规则） */
@@ -205,20 +363,47 @@ export function joinCompositeParamValue(
 }
 
 /**
- * 解析 Jenkins「Build with Parameters」页（/job/.../build?delay=0sec）的 HTML。
- * 范围：`form.jenkins-form` 下每个 `.jenkins-form-item`。
- * 块级 key 仅当满足标准模板（value 文本 / fillUrl 下拉 / name=value 下拉）时使用 hidden `name`；
- * 否则拆分为各子控件自身的 `name` 作为 key。
+ * 仅 DOM：带 fillUrl 的 select 只用当前 HTML 内 option，不请求接口。
+ * 适合无凭证场景或与 async 解析逻辑对齐前的快照。
  */
 export function parseJenkinsBuildParameterFormHtml(html: string): ParsedBuildFormParam[] {
   const doc = parseHtmlToDocument(html)
-  const form = doc.querySelector('form.jenkins-form')
-  if (!form) return []
+  const formRoot = doc.querySelector('form.jenkins-form')
+  if (!formRoot) return []
 
-  const items = form.querySelectorAll('.jenkins-form-item')
+  const items = formRoot.querySelectorAll('.jenkins-form-item')
   const out: ParsedBuildFormParam[] = []
   for (const item of items) {
-    out.push(...parseFormItem(item))
+    out.push(...parseFormItemSync(item))
   }
   return out
+}
+
+/**
+ * 解析 Jenkins「Build with Parameters」页 HTML；选择字段中带 fillUrl 的会通过 ctx 拉全量 options（URL 去重）。
+ */
+export async function parseJenkinsBuildParameterFormAsync(
+  html: string,
+  ctx: ParseJenkinsBuildFormAsyncContext,
+): Promise<ParseJenkinsBuildFormAsyncResult> {
+  const doc = parseHtmlToDocument(html)
+  const formRoot = doc.querySelector('form.jenkins-form')
+  if (!formRoot) {
+    return { params: [], fillUrlErrors: [] }
+  }
+
+  const fillUrlCache = new Map<string, Promise<string[]>>()
+  const fillUrlErrors: string[] = []
+  const innerCtx = {
+    fetchFillUrlOptions: ctx.fetchFillUrlOptions,
+    fillUrlCache,
+    fillUrlErrors,
+  }
+
+  const items = formRoot.querySelectorAll('.jenkins-form-item')
+  const params: ParsedBuildFormParam[] = []
+  for (const item of items) {
+    params.push(...(await parseFormItemAsync(item, innerCtx)))
+  }
+  return { params, fillUrlErrors }
 }

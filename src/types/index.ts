@@ -42,6 +42,12 @@ export interface JobParamConfig {
    * 仅对 choice 生效：执行时是否从 Jenkins 参数页重新抓取该下拉的首项（默认 false）
    */
   choiceLatest?: boolean
+  /**
+   * 无标准 name=value 的参数块：块级行，展示值始终与同块最后一子字段一致（仅 UI）
+   */
+  compositeBlockLeader?: boolean
+  /** 子字段所属块级参数名（与 compositeBlockLeader 行的 key 一致） */
+  parentBlockKey?: string
 }
 
 export interface JobParamAutoFillRule {

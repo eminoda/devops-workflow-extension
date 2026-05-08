@@ -42,6 +42,16 @@
                 <div class="flex min-w-0 items-center gap-2">
                   <div class="truncate text-sm font-medium">{{ item.job.name || '新 Job' }}</div>
                   <button
+                    v-if="jenkinsJobPageUrl(item.job)"
+                    type="button"
+                    class="inline-flex shrink-0 rounded-sm text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    title="在 Jenkins 中打开该 Job"
+                    aria-label="在 Jenkins 中打开该 Job"
+                    @click.stop="openUrlTab(jenkinsJobPageUrl(item.job)!)"
+                  >
+                    <Link class="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                  <button
                     v-if="item.job.verifyUrl?.trim()"
                     type="button"
                     class="inline-flex shrink-0 rounded-sm text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -49,7 +59,7 @@
                     aria-label="打开验证地址"
                     @click.stop="openUrlTab(item.job.verifyUrl!.trim())"
                   >
-                    <ExternalLink class="h-3.5 w-3.5" aria-hidden="true" />
+                    <Globe class="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
                   <Badge v-if="draftMap[item.job.id]" variant="secondary" class="shrink-0">草稿</Badge>
                 </div>
@@ -123,7 +133,12 @@
             </div>
 
             <template v-else>
-              <div v-for="(row, idx) in rowCache[curJob.id] || []" :key="idx" class="space-y-1.5">
+              <div
+                v-for="(row, idx) in rowCache[curJob.id] || []"
+                :key="idx"
+                class="space-y-1.5"
+                :class="row.parentBlockKey ? 'ms-5 border-l-2 border-border/50 pl-3' : ''"
+              >
                 <div class="flex gap-2">
                   <Input
                     v-model="row.k"
@@ -142,6 +157,14 @@
                         {{ opt }}
                       </option>
                     </select>
+                  </template>
+                  <template v-else-if="row.compositeBlockLeader">
+                    <Input
+                      v-model="row.v"
+                      readonly
+                      class="min-w-0 flex-[7] cursor-default bg-muted/40 text-xs"
+                      title="取值与同块最后一项子参数同步，请编辑下方子参数"
+                    />
                   </template>
                   <template v-else>
                     <Input v-model="row.v" class="min-w-0 flex-[7] text-xs" placeholder="参数值" @input="onRowChange(curJob)" />
@@ -212,11 +235,6 @@
               @input="markDirty(curJob.id)"
             />
           </div>
-
-          <p v-if="curJob.lastSuccessParams" class="text-xs text-muted-foreground">
-            上次成功：
-            <code class="rounded bg-muted px-1 py-0.5">{{ JSON.stringify(curJob.lastSuccessParams) }}</code>
-          </p>
         </CardContent>
       </Card>
       <!-- 悬浮操作栏（详情页） -->
@@ -273,8 +291,9 @@ import { useRouter } from 'vue-router'
 import {
   ChevronLeft,
   CornerDownRight,
-  ExternalLink,
   Folder,
+  Globe,
+  Link,
   Loader2,
   Play,
   Plus,
@@ -293,9 +312,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { defaultParamAutoFillSelectorString } from '@/lib/jenkins-param-autofill-selectors'
 import {
   joinCompositeParamValue,
-  parseJenkinsBuildParameterFormHtml,
+  parseJenkinsBuildParameterFormAsync,
 } from '@/lib/jenkins-build-form-parse'
-import { fetchBuildWithParamsPageHtml, fetchJenkinsFillUrlOptions } from '@/lib/jenkins'
+import { buildJobPageUrl, fetchBuildWithParamsPageHtml, fetchJenkinsFillUrlOptions } from '@/lib/jenkins'
 import { cn } from '@/lib/utils'
 import { loadJobs, loadSettings, saveJobs, STORAGE_RELOAD_EVENT } from '@/lib/storage'
 import { pipelineUiBusy, runJobFromUi } from '@/ui/composables/pipelineUiState'
@@ -322,6 +341,8 @@ function newJob(): JobConfig {
 }
 
 const jobs = ref<JobConfig[]>([])
+/** Jenkins 站点根地址（用于列表行跳转 Job 页） */
+const jenkinsBaseUrl = ref('')
 /** 列表展示：按 nextJobId 链缩进，子 Job 左侧虚线 + 缩进 */
 type JobListRow = { job: JobConfig; depth: number }
 const jobsListDisplay = computed<JobListRow[]>(() => {
@@ -371,7 +392,15 @@ function showJobListDivider(index: number): boolean {
 const mode = ref<'list' | 'detail'>('list')
 const selectedJobId = ref<string | null>(null)
 const curJob = computed(() => jobs.value.find((j) => j.id === selectedJobId.value) ?? null)
-type ParamRow = { k: string; v: string; t: JobParamInputType; dynamicLatest?: boolean; choiceLatest?: boolean }
+type ParamRow = {
+  k: string
+  v: string
+  t: JobParamInputType
+  dynamicLatest?: boolean
+  choiceLatest?: boolean
+  parentBlockKey?: string
+  compositeBlockLeader?: boolean
+}
 const rowCache = reactive<Record<string, ParamRow[]>>({})
 const msg = reactive<Record<string, string>>({})
 const draftMap = reactive<Record<string, boolean>>({})
@@ -386,6 +415,8 @@ const manualParam = reactive({ k: '', v: '' })
 
 async function bootstrapJobsFromStorage() {
   jobs.value = await loadJobs()
+  const settings = await loadSettings()
+  jenkinsBaseUrl.value = settings.jenkinsUrl?.trim() ?? ''
   for (const k of Object.keys(rowCache)) delete rowCache[k]
   for (const k of Object.keys(paramOptionCache)) delete paramOptionCache[k]
   for (const k of Object.keys(buildParamsLoading)) delete buildParamsLoading[k]
@@ -426,6 +457,13 @@ async function runOne(j: JobConfig) {
 
 function openUrlTab(u: string) {
   openUrlInNewTab(u)
+}
+
+function jenkinsJobPageUrl(job: JobConfig): string | null {
+  const base = jenkinsBaseUrl.value
+  const path = job.jobPath?.trim()
+  if (!base || !path) return null
+  return buildJobPageUrl(base, path)
 }
 
 function goList() {
@@ -493,10 +531,19 @@ function ensureRows(j: JobConfig) {
     const entries = Object.entries(d)
     rowCache[j.id] = entries.length
       ? entries.map(([k, v]) => {
-          const t = (j.paramConfig?.[k]?.type ?? (j.paramAutoFill?.[k] ? 'dynamic' : 'text')) as JobParamInputType
-          const dynamicLatest = j.paramConfig?.[k]?.dynamicLatest ?? true
-          const choiceLatest = j.paramConfig?.[k]?.choiceLatest === true
-          return { k, v: String(v), t, dynamicLatest, choiceLatest }
+          const pc = j.paramConfig?.[k]
+          const t = (pc?.type ?? (j.paramAutoFill?.[k] ? 'dynamic' : 'text')) as JobParamInputType
+          const dynamicLatest = pc?.dynamicLatest ?? true
+          const choiceLatest = pc?.choiceLatest === true
+          return {
+            k,
+            v: String(v),
+            t,
+            dynamicLatest,
+            choiceLatest,
+            parentBlockKey: pc?.parentBlockKey,
+            compositeBlockLeader: pc?.compositeBlockLeader,
+          }
         })
       : []
   }
@@ -515,6 +562,8 @@ function rowsToParams(j: JobConfig) {
       type: r.t,
       dynamicLatest: r.t === 'dynamic' ? (r.dynamicLatest ?? true) : undefined,
       choiceLatest: r.t === 'choice' ? !!r.choiceLatest : undefined,
+      compositeBlockLeader: r.compositeBlockLeader === true ? true : undefined,
+      parentBlockKey: r.parentBlockKey?.trim() ? r.parentBlockKey.trim() : undefined,
     }
 
     // 动态 / choice 勾选「执行时取最新」：运行时从参数页抓取该下拉首项覆盖提交值
@@ -531,7 +580,30 @@ function rowsToParams(j: JobConfig) {
   j.paramConfig = cfg
 }
 
+/** 块级占位行与同块最后一子字段 value 对齐 */
+function syncCompositeBlockLeaders(j: JobConfig) {
+  const rows = rowCache[j.id]
+  if (!rows?.length) return
+  const childrenByLeader = new Map<string, ParamRow[]>()
+  for (const r of rows) {
+    const pb = r.parentBlockKey?.trim()
+    if (pb) {
+      if (!childrenByLeader.has(pb)) childrenByLeader.set(pb, [])
+      childrenByLeader.get(pb)!.push(r)
+    }
+  }
+  for (const r of rows) {
+    if (!r.compositeBlockLeader || !r.k.trim()) continue
+    const kids = childrenByLeader.get(r.k.trim())
+    if (kids?.length) {
+      const last = kids[kids.length - 1]!
+      r.v = last.v
+    }
+  }
+}
+
 function onRowChange(j: JobConfig) {
+  syncCompositeBlockLeaders(j)
   rowsToParams(j)
   markDirty(j.id)
 }
@@ -558,7 +630,15 @@ async function syncBuildParamsFromHtml(j: JobConfig) {
       j.jobPath,
       undefined,
     )
-    const parsed = parseJenkinsBuildParameterFormHtml(html)
+    const { params: parsed, fillUrlErrors } = await parseJenkinsBuildParameterFormAsync(html, {
+      fetchFillUrlOptions: (u) =>
+        fetchJenkinsFillUrlOptions(
+          settings.jenkinsUrl,
+          settings.jenkinsUser,
+          settings.jenkinsToken,
+          u,
+        ),
+    })
     if (!parsed.length) {
       msg[j.id] = '未解析到参数：请确认该 Job 为参数化构建，且当前账号可访问参数页。'
       rowCache[j.id] = []
@@ -567,32 +647,16 @@ async function syncBuildParamsFromHtml(j: JobConfig) {
       return
     }
 
-    const fillUrlErrors: string[] = []
     for (const p of parsed) {
-      const fu = p.fillUrl?.trim()
-      if (!fu) continue
-      try {
-        const opts = await fetchJenkinsFillUrlOptions(
-          settings.jenkinsUrl,
-          settings.jenkinsUser,
-          settings.jenkinsToken,
-          fu,
+      const hasComposite = !!(p.compositePrefix?.trim() || p.compositeSuffix?.trim())
+      if (hasComposite && p.options.length) {
+        p.options = p.options.map((t) =>
+          joinCompositeParamValue(String(t).trim(), p.compositePrefix, p.compositeSuffix),
         )
-        if (opts.length) {
-          const hasComposite = !!(p.compositePrefix?.trim() || p.compositeSuffix?.trim())
-          if (hasComposite) {
-            p.options = opts.map((t) =>
-              joinCompositeParamValue(String(t).trim(), p.compositePrefix, p.compositeSuffix),
-            )
-            const firstComb = p.options[0] ?? ''
-            p.value = p.options.includes(p.value) ? p.value : firstComb
-          } else {
-            p.options = opts
-            p.value = opts.includes(p.value) ? p.value : (opts[0] ?? '')
-          }
-        }
-      } catch (e) {
-        fillUrlErrors.push(`${p.key}: ${(e as Error).message}`)
+        const firstComb = p.options[0] ?? ''
+        p.value = p.options.includes(p.value) ? p.value : firstComb
+      } else if (p.options.length && p.fillUrl?.trim()) {
+        p.value = p.options.includes(p.value) ? p.value : (p.options[0] ?? '')
       }
     }
 
@@ -612,6 +676,8 @@ async function syncBuildParamsFromHtml(j: JobConfig) {
           t: prev.t,
           dynamicLatest: prev.dynamicLatest,
           choiceLatest: prev.choiceLatest,
+          parentBlockKey: p.parentBlockKey ?? prev.parentBlockKey,
+          compositeBlockLeader: p.compositeBlockLeader === true ? true : prev.compositeBlockLeader,
         }
       }
       return {
@@ -620,8 +686,12 @@ async function syncBuildParamsFromHtml(j: JobConfig) {
         t: p.type,
         dynamicLatest: p.type === 'dynamic' ? true : undefined,
         choiceLatest: p.type === 'choice' ? false : undefined,
+        parentBlockKey: p.parentBlockKey,
+        compositeBlockLeader: p.compositeBlockLeader === true ? true : undefined,
       }
     })
+
+    syncCompositeBlockLeaders(j)
 
     for (let i = 0; i < parsed.length; i++) {
       const p = parsed[i]
@@ -685,6 +755,7 @@ function getParamOptions(jobId: string, paramKey: string, t: JobParamInputType):
 
 function onParamOptionSelected(ev: Event, j: JobConfig, row: ParamRow) {
   row.v = (ev.target as HTMLSelectElement).value
+  syncCompositeBlockLeaders(j)
   rowsToParams(j)
   markDirty(j.id)
 }
@@ -693,6 +764,7 @@ function onLatestAtRunCheckbox(j: JobConfig, row: ParamRow, ev: Event) {
   const checked = (ev.target as HTMLInputElement).checked
   if (row.t === 'dynamic') row.dynamicLatest = checked
   else if (row.t === 'choice') row.choiceLatest = checked
+  syncCompositeBlockLeaders(j)
   rowsToParams(j)
   markDirty(j.id)
 }

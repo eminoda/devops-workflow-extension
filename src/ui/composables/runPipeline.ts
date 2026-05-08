@@ -8,7 +8,7 @@ import {
 } from '@/lib/jenkins'
 import {
   joinCompositeParamValue,
-  parseJenkinsBuildParameterFormHtml,
+  parseJenkinsBuildParameterFormAsync,
   type ParsedBuildFormParam,
 } from '@/lib/jenkins-build-form-parse'
 import { paramAutoFillSelectorCandidates } from '@/lib/jenkins-param-autofill-selectors'
@@ -30,27 +30,9 @@ function normalizedJenkinsBuildResult(raw: string | null | undefined): BuildResu
 export type BuildAllocatedHandler = (info: { buildUrl: string; buildNumber: number | null }) => void
 
 /**
- * 按参数页解析结果打「解析策略」日志；fillUrl 结果写入 cache 供后续自动取值复用。
+ * 基于已解析（含 fillUrl 拉取后）的参数表打日志，不再发起网络请求。
  */
-async function logParsedBuildFormStrategies(
-  settings: JenkinsSettings,
-  parsed: ParsedBuildFormParam[],
-  fillUrlOptionCache: Map<string, string[]>,
-  log?: (s: string) => void,
-): Promise<void> {
-  const loadFillOpts = async (fillUrl: string): Promise<string[]> => {
-    const u = fillUrl.trim()
-    if (fillUrlOptionCache.has(u)) return fillUrlOptionCache.get(u)!
-    const opts = await fetchJenkinsFillUrlOptions(
-      settings.jenkinsUrl,
-      settings.jenkinsUser,
-      settings.jenkinsToken,
-      u,
-    )
-    fillUrlOptionCache.set(u, opts)
-    return opts
-  }
-
+function logParsedBuildFormStrategies(parsed: ParsedBuildFormParam[], log?: (s: string) => void): void {
   for (const p of parsed) {
     log?.(`解析参数 [${p.key}]`)
 
@@ -64,22 +46,13 @@ async function logParsedBuildFormStrategies(
     const asInterfaceLoad = p.type === 'dynamic' || !!fillUrl
 
     if (asInterfaceLoad) {
+      const snap = String(p.options[0] ?? p.value ?? '').trim() || '（无）'
+      const first =
+        snap !== '（无）' ? joinCompositeParamValue(snap, p.compositePrefix, p.compositeSuffix) : snap
       if (fillUrl) {
-        try {
-          const opts = await loadFillOpts(fillUrl)
-          const rawFirst = opts.length ? String(opts[0]).trim() : '（无）'
-          const first =
-            rawFirst !== '（无）'
-              ? joinCompositeParamValue(rawFirst, p.compositePrefix, p.compositeSuffix)
-              : rawFirst
-          log?.(`解析策略：接口加载 [${first}]`)
-        } catch {
-          const snap = String(p.options[0] ?? p.value ?? '').trim() || '（无）'
-          log?.(`解析策略：接口加载 [${snap}]（接口失败，参数页快照）`)
-        }
+        log?.(`解析策略：接口加载 [${first}]`)
       } else {
-        const snap = String(p.options[0] ?? p.value ?? '').trim() || '（无）'
-        log?.(`解析策略：接口加载 [${snap}]（参数页内选项）`)
+        log?.(`解析策略：接口加载 [${first}]（参数页内选项）`)
       }
       continue
     }
@@ -267,10 +240,17 @@ async function applyParamAutoFill(
     settings.jenkinsToken,
     job.jobPath,
   )
-  const parsedForm = parseJenkinsBuildParameterFormHtml(defaultHtml)
+  const { params: parsedForm } = await parseJenkinsBuildParameterFormAsync(defaultHtml, {
+    fetchFillUrlOptions: (u) =>
+      fetchJenkinsFillUrlOptions(settings.jenkinsUrl, settings.jenkinsUser, settings.jenkinsToken, u),
+  })
   const fillUrlOptionCache = new Map<string, string[]>()
+  for (const p of parsedForm) {
+    const fu = p.fillUrl?.trim()
+    if (fu && p.options.length) fillUrlOptionCache.set(fu, p.options)
+  }
   if (parsedForm.length) {
-    await logParsedBuildFormStrategies(settings, parsedForm, fillUrlOptionCache, log)
+    logParsedBuildFormStrategies(parsedForm, log)
   } else {
     log?.('解析参数：（delay=0sec 参数页未解析到任何表单项）')
   }
