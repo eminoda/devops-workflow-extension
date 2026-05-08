@@ -1,7 +1,7 @@
 {
   "name": "jenkins-runner-extension",
   "type": "module",
-  "version": "1.0.0-alpha.6",
+  "version": "1.0.0",
   "private": true,
   "description": "Chrome 扩展：Jenkins 轻量编排与状态跟进",
   "scripts": {
