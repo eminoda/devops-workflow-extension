@@ -35,8 +35,21 @@
 
       <Tabs v-model="tab" class="mt-2 w-full">
         <TabsList class="grid w-full grid-cols-2">
-          <TabsTrigger value="run">运行监控</TabsTrigger>
-          <TabsTrigger value="jobs">Jobs 管理</TabsTrigger>
+          <TabsTrigger value="run">
+            <span class="truncate">运行监控</span>
+          </TabsTrigger>
+          <TabsTrigger value="jobs" class="px-2">
+            <span class="min-w-0 truncate">Jobs 管理</span>
+            <button
+              type="button"
+              class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40"
+              title="新建 Job"
+              :disabled="pipelineUiBusy"
+              @click.stop.prevent="onJobsTabAddClick"
+            >
+              <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </TabsTrigger>
         </TabsList>
       </Tabs>
     </header>
@@ -74,8 +87,8 @@
 
 <script setup lang="ts">
 import logo128 from '@/assets/icons/icon-128.png'
-import { FileJson, FolderInput, Settings } from 'lucide-vue-next'
-import { computed, onMounted, ref } from 'vue'
+import { FileJson, FolderInput, Plus, Settings } from 'lucide-vue-next'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -84,7 +97,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import JenkinsSettingsForm from '@/components/settings/JenkinsSettingsForm.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import { exportBackupToFile, importBackupFromJsonString, loadSettings } from '@/lib/storage'
-import { registerPipelineSessionSync } from '@/ui/composables/pipelineUiState'
+import { pipelineUiBusy, registerPipelineSessionSync } from '@/ui/composables/pipelineUiState'
 import { toast } from '@/ui/toast'
 import type { JenkinsSettings } from '@/types'
 
@@ -138,6 +151,15 @@ const tab = computed<string>({
     else void router.push('/')
   },
 })
+
+const NEW_JOB_EVENT = 'jenkins-runner-new-job'
+
+function onJobsTabAddClick() {
+  tab.value = 'jobs'
+  void nextTick(() => {
+    window.dispatchEvent(new CustomEvent(NEW_JOB_EVENT))
+  })
+}
 
 onMounted(async () => {
   registerPipelineSessionSync()

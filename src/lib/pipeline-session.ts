@@ -4,6 +4,8 @@ export type PipelineSessionState = {
   busy: boolean
   log: string
   activeBuildUrl: string | null
+  /** 当前「本次日志」归属的运行记录 id（与 RunRecord.id 一致） */
+  activeRunId: string | null
 }
 
 const KEY = 'jenkins_runner_pipeline_ui'
@@ -12,7 +14,7 @@ const KEY = 'jenkins_runner_pipeline_ui'
 export const PIPELINE_SESSION_KEY = KEY
 
 function defaultState(): PipelineSessionState {
-  return { busy: false, log: '', activeBuildUrl: null }
+  return { busy: false, log: '', activeBuildUrl: null, activeRunId: null }
 }
 
 export async function readPipelineSession(): Promise<PipelineSessionState> {
@@ -24,6 +26,7 @@ export async function readPipelineSession(): Promise<PipelineSessionState> {
     log: typeof s.log === 'string' ? s.log : '',
     activeBuildUrl:
       s.activeBuildUrl != null && typeof s.activeBuildUrl === 'string' ? s.activeBuildUrl : null,
+    activeRunId: s.activeRunId != null && typeof s.activeRunId === 'string' ? s.activeRunId : null,
   }
 }
 

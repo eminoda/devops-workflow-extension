@@ -1,4 +1,5 @@
 import { fetchBuildJson, fetchQueueItemJson } from '@/lib/jenkins'
+import { pruneParamAutoFillToDisplayParams } from '@/lib/job-param-autofill-prune'
 import type { BuildResult, JobConfig, JenkinsSettings, RunRecord } from '@/types'
 import { defaultSettings } from '@/types'
 
@@ -146,13 +147,20 @@ export async function saveSettings(s: JenkinsSettings): Promise<void> {
 
 function normalizeJob(j: JobConfig): JobConfig {
   const id = typeof j.id === 'string' && j.id.trim() ? j.id : crypto.randomUUID()
+  const displayParams =
+    j.displayParams && typeof j.displayParams === 'object' && !Array.isArray(j.displayParams) ? j.displayParams : {}
+  const paramAutoFill =
+    j.paramAutoFill && typeof j.paramAutoFill === 'object' && !Array.isArray(j.paramAutoFill)
+      ? { ...j.paramAutoFill }
+      : {}
+  pruneParamAutoFillToDisplayParams(paramAutoFill, displayParams)
   return {
     id,
     name: typeof j.name === 'string' ? j.name : '',
     jobPath: typeof j.jobPath === 'string' ? j.jobPath : '',
-    displayParams: j.displayParams && typeof j.displayParams === 'object' && !Array.isArray(j.displayParams) ? j.displayParams : {},
+    displayParams,
     paramConfig: j.paramConfig && typeof j.paramConfig === 'object' && !Array.isArray(j.paramConfig) ? j.paramConfig : {},
-    paramAutoFill: j.paramAutoFill && typeof j.paramAutoFill === 'object' && !Array.isArray(j.paramAutoFill) ? j.paramAutoFill : {},
+    paramAutoFill,
     nextJobId: typeof j.nextJobId === 'string' && j.nextJobId.trim() ? j.nextJobId : null,
     lastSuccessParams:
       j.lastSuccessParams && typeof j.lastSuccessParams === 'object' && !Array.isArray(j.lastSuccessParams)

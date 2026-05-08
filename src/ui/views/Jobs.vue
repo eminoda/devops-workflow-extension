@@ -2,13 +2,6 @@
   <div class="space-y-4">
     <!-- 列表页 -->
     <template v-if="mode === 'list'">
-      <div class="flex items-center justify-between gap-2">
-        <h1 class="text-sm font-semibold">Jobs 管理</h1>
-        <Button v-if="jobs.length" type="button" size="icon" title="新建 Job" @click="addJobAndOpen">
-          <Plus class="h-4 w-4" />
-        </Button>
-      </div>
-
       <NoJobsCard v-if="!jobs.length" @add="addJobAndOpen" />
 
       <div v-else class="flex flex-col">
@@ -147,7 +140,10 @@
                     @input="onRowChange(curJob)"
                   />
 
-                  <template v-if="row.t !== 'text' && getParamOptions(curJob.id, row.k, row.t).length">
+                  <template v-if="hideParamValueForLatestRun(curJob.id, row)">
+                    <div class="min-h-9 min-w-0 flex-[7]" aria-hidden="true" />
+                  </template>
+                  <template v-else-if="row.t !== 'text' && getParamOptions(curJob.id, row.k, row.t).length">
                     <select
                       :class="cn(selectCls, 'min-w-0 flex-[7] text-xs')"
                       :value="row.v"
@@ -210,18 +206,50 @@
             <Separator />
 
             <div class="space-y-2">
-              <Label :for="`next-${curJob.id}`">关联 Job</Label>
-              <select
-                :id="`next-${curJob.id}`"
-                :value="curJob.nextJobId ?? ''"
-                :class="selectCls"
-                @change="onNextJobChange($event, curJob)"
-              >
-                <option value="">（不关联）</option>
-                <option v-for="o in otherJobs(curJob.id)" :key="o.id" :value="o.id">
-                  {{ o.name || o.id }}
-                </option>
-              </select>
+              <Label :for="`next-search-${curJob.id}`">关联 Job</Label>
+              <div class="relative" @focusout="onNextJobPickerFocusOut">
+                <Input
+                  :id="`next-search-${curJob.id}`"
+                  v-model="nextJobSearchQuery"
+                  type="text"
+                  class="text-xs"
+                  placeholder="输入名称、路径或 id 筛选…"
+                  autocomplete="off"
+                  @focus="onNextJobInputFocus"
+                  @input="onNextJobSearchInput(curJob)"
+                />
+                <div
+                  v-show="nextJobDropdownOpen && curJob"
+                  class="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-auto rounded-md border border-border bg-background py-1 text-foreground shadow-md"
+                  role="listbox"
+                >
+                  <button
+                    type="button"
+                    role="option"
+                    class="flex w-full px-3 py-2 text-left text-xs hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                    @mousedown.prevent="clearNextJob(curJob)"
+                  >
+                    （不关联）
+                  </button>
+                  <button
+                    v-for="o in filteredNextJobCandidates(curJob.id)"
+                    :key="o.id"
+                    type="button"
+                    role="option"
+                    class="flex w-full flex-col gap-0.5 px-3 py-2 text-left text-xs hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                    @mousedown.prevent="selectNextJob(curJob, o)"
+                  >
+                    <span class="font-medium">{{ o.name || o.id }}</span>
+                    <span v-if="o.jobPath?.trim()" class="font-mono text-[10px] text-muted-foreground">{{ o.jobPath }}</span>
+                  </button>
+                  <div
+                    v-if="!filteredNextJobCandidates(curJob.id).length"
+                    class="px-3 py-2 text-xs text-muted-foreground"
+                  >
+                    无匹配 Job
+                  </div>
+                </div>
+              </div>
             </div>
           </template>
 
@@ -286,7 +314,7 @@
 
 <script setup lang="ts">
 import { watchDebounced } from '@vueuse/core'
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ChevronLeft,
@@ -309,6 +337,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { pruneParamAutoFillToDisplayParams } from '@/lib/job-param-autofill-prune'
 import { defaultParamAutoFillSelectorString } from '@/lib/jenkins-param-autofill-selectors'
 import {
   joinCompositeParamValue,
@@ -323,6 +352,11 @@ import { toast } from '@/ui/toast'
 import type { JobConfig, JobParamConfig, JobParamInputType } from '@/types'
 
 const router = useRouter()
+
+const NEW_JOB_FROM_TAB_EVENT = 'jenkins-runner-new-job'
+
+const nextJobSearchQuery = ref('')
+const nextJobDropdownOpen = ref(false)
 
 const selectCls = cn(
   'flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
@@ -435,13 +469,19 @@ function onStorageReloadFromImport() {
   void bootstrapJobsFromStorage()
 }
 
+function onNewJobFromTab() {
+  addJobAndOpen()
+}
+
 onMounted(async () => {
   await bootstrapJobsFromStorage()
   window.addEventListener(STORAGE_RELOAD_EVENT, onStorageReloadFromImport)
+  window.addEventListener(NEW_JOB_FROM_TAB_EVENT, onNewJobFromTab)
 })
 
 onUnmounted(() => {
   window.removeEventListener(STORAGE_RELOAD_EVENT, onStorageReloadFromImport)
+  window.removeEventListener(NEW_JOB_FROM_TAB_EVENT, onNewJobFromTab)
 })
 
 async function runOne(j: JobConfig) {
@@ -578,6 +618,7 @@ function rowsToParams(j: JobConfig) {
   }
   j.displayParams = p
   j.paramConfig = cfg
+  pruneParamAutoFillToDisplayParams(j.paramAutoFill, p)
 }
 
 /** 块级占位行与同块最后一子字段 value 对齐 */
@@ -753,6 +794,14 @@ function getParamOptions(jobId: string, paramKey: string, t: JobParamInputType):
   return paramOptionCache[optionKey(jobId, k, t)] || []
 }
 
+/** 勾选「执行时取最新值」时隐藏值输入/下拉（与下方复选框语义一致，仅对已有选项的 choice/dynamic 生效） */
+function hideParamValueForLatestRun(jobId: string, row: ParamRow): boolean {
+  if (row.t !== 'choice' && row.t !== 'dynamic') return false
+  if (!getParamOptions(jobId, row.k, row.t).length) return false
+  if (row.t === 'dynamic') return row.dynamicLatest !== false
+  return !!row.choiceLatest
+}
+
 function onParamOptionSelected(ev: Event, j: JobConfig, row: ParamRow) {
   row.v = (ev.target as HTMLSelectElement).value
   syncCompositeBlockLeaders(j)
@@ -769,11 +818,78 @@ function onLatestAtRunCheckbox(j: JobConfig, row: ParamRow, ev: Event) {
   markDirty(j.id)
 }
 
-function onNextJobChange(ev: Event, j: JobConfig) {
-  const v = (ev.target as HTMLSelectElement).value
-  j.nextJobId = v ? v : null
+function formatJobOptionLabel(o: JobConfig): string {
+  const n = (o.name ?? '').trim()
+  if (n) return n
+  const p = (o.jobPath ?? '').trim()
+  if (p) return p
+  return o.id
+}
+
+function syncNextJobSearchFromCurJob() {
+  const j = curJob.value
+  if (!j) return
+  const id = (j.nextJobId ?? '').trim()
+  if (!id) {
+    nextJobSearchQuery.value = ''
+    return
+  }
+  const o = jobs.value.find((x) => x.id === id)
+  nextJobSearchQuery.value = o ? formatJobOptionLabel(o) : id
+}
+
+function filteredNextJobCandidates(selfId: string): JobConfig[] {
+  const q = nextJobSearchQuery.value.trim().toLowerCase()
+  const list = otherJobs(selfId)
+  if (!q) return list
+  return list.filter((o) => {
+    const name = (o.name || '').toLowerCase()
+    const path = (o.jobPath || '').toLowerCase()
+    const id = o.id.toLowerCase()
+    return name.includes(q) || path.includes(q) || id.includes(q)
+  })
+}
+
+function onNextJobInputFocus() {
+  nextJobDropdownOpen.value = true
+}
+
+function onNextJobSearchInput(_j: JobConfig) {
+  nextJobDropdownOpen.value = true
+}
+
+function onNextJobPickerFocusOut(ev: FocusEvent) {
+  const rel = ev.relatedTarget as Node | null
+  if (rel && (ev.currentTarget as HTMLElement).contains(rel)) return
+  nextJobDropdownOpen.value = false
+  syncNextJobSearchFromCurJob()
+}
+
+function selectNextJob(j: JobConfig, o: JobConfig) {
+  j.nextJobId = o.id
+  nextJobSearchQuery.value = formatJobOptionLabel(o)
+  nextJobDropdownOpen.value = false
   markDirty(j.id)
 }
+
+function clearNextJob(j: JobConfig) {
+  j.nextJobId = null
+  nextJobSearchQuery.value = ''
+  nextJobDropdownOpen.value = false
+  markDirty(j.id)
+}
+
+watch(
+  () => [mode.value, selectedJobId.value] as const,
+  () => {
+    if (mode.value === 'detail') {
+      syncNextJobSearchFromCurJob()
+    } else {
+      nextJobDropdownOpen.value = false
+    }
+  },
+  { flush: 'post' },
+)
 
 function addParamRow(j: JobConfig) {
   ensureRows(j)

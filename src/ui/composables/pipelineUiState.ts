@@ -5,11 +5,13 @@ import { PIPELINE_SESSION_KEY, readPipelineSession, type PipelineSessionState } 
 export const pipelineUiBusy = ref(false)
 export const pipelineUiLog = ref('')
 export const pipelineUiActiveBuildUrl = ref<string | null>(null)
+export const pipelineUiActiveRunId = ref<string | null>(null)
 
 function applySession(s: PipelineSessionState) {
   pipelineUiBusy.value = s.busy
   pipelineUiLog.value = s.log
   pipelineUiActiveBuildUrl.value = s.activeBuildUrl
+  pipelineUiActiveRunId.value = s.activeRunId
 }
 
 export async function refreshPipelineUiFromSession(): Promise<void> {
@@ -25,14 +27,7 @@ export function registerPipelineSessionSync(): void {
   void refreshPipelineUiFromSession()
   chrome.storage.session.onChanged.addListener((changes) => {
     if (!(PIPELINE_SESSION_KEY in changes)) return
-    const nv = changes[PIPELINE_SESSION_KEY]?.newValue as Partial<PipelineSessionState> | undefined
-    if (!nv || typeof nv !== 'object') return
-    applySession({
-      busy: !!nv.busy,
-      log: typeof nv.log === 'string' ? nv.log : '',
-      activeBuildUrl:
-        nv.activeBuildUrl != null && typeof nv.activeBuildUrl === 'string' ? nv.activeBuildUrl : null,
-    })
+    void refreshPipelineUiFromSession()
   })
 }
 

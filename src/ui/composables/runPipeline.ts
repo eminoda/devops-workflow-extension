@@ -13,9 +13,32 @@ import {
 } from '@/lib/jenkins-build-form-parse'
 import { paramAutoFillSelectorCandidates } from '@/lib/jenkins-param-autofill-selectors'
 import { parseHtmlToDocument } from '@/lib/parse-html-document'
+import { patchPipelineSession } from '@/lib/pipeline-session'
 import { appendRun, loadJobs, loadSettings, saveJobs, updateRun } from '@/lib/storage'
 import { sendWecomMarkdown } from '@/lib/wecom'
 import type { BuildResult, JobConfig, JenkinsSettings, JobParamAutoFillRule, RunRecord } from '@/types'
+
+/**
+ * 与 Jobs 详情 `syncCompositeBlockLeaders` 一致：块头提交值 = 同块按 `displayParams` 顺序最后一个子字段的值。
+ * 执行时仅 `imageTag` 等子字段被自动取值更新时，须把 `DOCKER_IMAGE` 等同块头一并对齐，否则 Jenkins 收到旧块头。
+ */
+function syncCompositeBlockLeadersInParams(job: JobConfig, params: Record<string, string>): void {
+  const cfg = job.paramConfig
+  if (!cfg || !Object.keys(cfg).length) return
+  const order = Object.keys(job.displayParams || {})
+  if (!order.length) return
+
+  for (const leader of order) {
+    if (!cfg[leader]?.compositeBlockLeader) continue
+    const leaderTrim = leader.trim()
+    const children = order.filter((k) => cfg[k]?.parentBlockKey?.trim() === leaderTrim)
+    if (!children.length) continue
+    const lastKey = children[children.length - 1]!
+    if (Object.prototype.hasOwnProperty.call(params, lastKey)) {
+      params[leader] = params[lastKey]!
+    }
+  }
+}
 
 export type RunLogHandler = (line: string) => void
 
@@ -90,6 +113,7 @@ export async function runJobAndMaybeChain(
 
   // 参数自动取值失败则中止：不向 Jenkins 触发构建（链式任务同理）
   await applyParamAutoFill(settings, job, params, log)
+  syncCompositeBlockLeadersInParams(job, params)
 
   const runId = crypto.randomUUID()
   const rec: RunRecord = {
@@ -105,6 +129,7 @@ export async function runJobAndMaybeChain(
     queueItemApiUrl: null,
   }
   await appendRun(rec)
+  await patchPipelineSession({ activeRunId: runId })
   log?.(`[${chainDepth > 0 ? '链式' : '开始'}] ${job.name} 触发中…`)
 
   const wh = webhookForJob(settings)

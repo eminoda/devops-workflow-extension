@@ -1,28 +1,6 @@
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <div class="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pb-2">
-      <Card v-if="pipelineUiBusy || pipelineUiLog">
-        <CardHeader class="flex flex-row items-center justify-between gap-2 pb-2">
-          <CardTitle class="text-sm">本次日志</CardTitle>
-          <Button
-            v-if="pipelineUiBusy && pipelineUiActiveBuildUrl"
-            variant="destructive"
-            size="icon"
-            type="button"
-            title="终止当前构建"
-            :disabled="stopBusy"
-            @click="stopActiveBuild"
-          >
-            <Square class="h-4 w-4" />
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <pre
-            class="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted p-3 font-mono text-xs"
-          >{{ pipelineUiLog || (pipelineUiBusy ? '…' : '') }}</pre>
-        </CardContent>
-      </Card>
-
       <div v-if="!history.length" class="flex flex-col items-center justify-center gap-4 py-12 text-center">
         <p class="text-sm text-muted-foreground">暂无运行记录</p>
         <Button type="button" size="sm" @click="goJobs">前往 Jobs 管理</Button>
@@ -30,7 +8,8 @@
 
       <div v-else class="space-y-2">
         <Card v-for="h in history" :key="h.id" class="border-border/80">
-          <CardContent class="flex flex-row items-start gap-3 py-3">
+          <CardContent class="flex flex-col gap-3 py-3">
+            <div class="flex flex-row items-start gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
                 <span class="font-medium">{{ h.jobName || 'Job' }}</span>
@@ -126,7 +105,7 @@
               </div>
             </div>
             <div
-              v-if="h.buildUrl && isRunningRow(h)"
+              v-if="showStopInMainRow(h)"
               class="ml-auto flex shrink-0 items-center gap-1 self-center"
             >
               <Button
@@ -139,6 +118,30 @@
               >
                 <Square class="h-4 w-4" />
               </Button>
+            </div>
+            </div>
+
+            <div
+              v-if="pipelineLogForRow(h)"
+              class="space-y-1.5 border-t border-border/60 pt-3"
+            >
+              <div class="flex flex-row items-center justify-between gap-2">
+                <span class="text-xs font-medium text-muted-foreground">本次日志</span>
+                <Button
+                  v-if="showStopInLogHeader(h)"
+                  variant="destructive"
+                  size="icon"
+                  type="button"
+                  title="终止当前构建"
+                  :disabled="stopBusy"
+                  @click="stopActiveBuild"
+                >
+                  <Square class="h-4 w-4" />
+                </Button>
+              </div>
+              <pre
+                class="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted p-3 font-mono text-xs"
+              >{{ pipelineUiLog || (pipelineUiBusy ? '…' : '') }}</pre>
             </div>
           </CardContent>
         </Card>
@@ -177,7 +180,7 @@ import {
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { buildJobPageUrl, stopJenkinsBuild } from '@/lib/jenkins'
 import {
   clearRunHistory,
@@ -190,6 +193,7 @@ import {
 import type { JobConfig, RunRecord } from '@/types'
 import {
   pipelineUiActiveBuildUrl,
+  pipelineUiActiveRunId,
   pipelineUiBusy,
   pipelineUiLog,
   requestStopActivePipelineBuild,
@@ -215,6 +219,26 @@ function isRunningRow(h: RunRecord) {
   if (r == null) return true
   if (typeof r === 'string' && !r.trim()) return true
   return false
+}
+
+function pipelineLogForRow(h: RunRecord): boolean {
+  return pipelineUiActiveRunId.value === h.id && (!!pipelineUiLog.value || pipelineUiBusy.value)
+}
+
+/** 本会话正在跑的构建：终止按钮放在「本次日志」标题旁 */
+function showStopInLogHeader(h: RunRecord): boolean {
+  return (
+    pipelineUiActiveRunId.value === h.id &&
+    pipelineUiBusy.value &&
+    !!pipelineUiActiveBuildUrl.value
+  )
+}
+
+/** 非本会话触发的执行中记录（如仅 reconcile）：终止仍在卡片主行右侧 */
+function showStopInMainRow(h: RunRecord): boolean {
+  if (!(h.buildUrl && isRunningRow(h))) return false
+  if (showStopInLogHeader(h)) return false
+  return true
 }
 
 /**

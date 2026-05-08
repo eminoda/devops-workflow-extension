@@ -71,7 +71,7 @@ async function handlePipelineStart(jobId: string): Promise<{ ok: boolean; error?
   if (!id) return { ok: false, error: '缺少 jobId' }
   const cur = await readPipelineSession()
   if (cur.busy) return { ok: false, error: '已有流水线在执行中' }
-  await patchPipelineSession({ busy: true, log: '', activeBuildUrl: null })
+  await patchPipelineSession({ busy: true, log: '', activeBuildUrl: null, activeRunId: null })
   void executePipelineInBackground(id)
   return { ok: true }
 }
